@@ -173,8 +173,9 @@ blueprint:
         knob_control_min_brightness:
           name: Min Brightness Limit (%)
           description:
-            최소 밝기 제한. 노브로 줄일 때 이 값(%) 아래로 어두워지거나 꺼지지 않습니다.
-            <br>기본값 `0`이면 제한 없이 꺼질 수 있습니다.
+            Set the minimum brightness limit. 
+            <br>The light will not dim below this value (%) when turning the knob.
+            <br>If set to 0 (default), there is no limit and the light can be turned off.
           default: 0
           selector:
             number:
@@ -187,8 +188,9 @@ blueprint:
         knob_control_max_brightness:
           name: Max Brightness Limit (%)
           description:
-            최대 밝기 제한. 노브로 키울 때 이 값(%) 이상으로 밝아지지 않습니다.
-            <br>기본값 `100`이면 제한 없습니다.
+            Set the maximum brightness limit.
+            <br>The light will not brighten above this value (%) when turning the knob.
+            <br>If set to 100 (default), there is no limit.
           default: 100
           selector:
             number:

@@ -61,7 +61,6 @@ blueprint:
       - Turning the knob right without pressing increases brightness (+), Turning the knob left without pressing decreases brightness (-).
       - Turning the knob right while pressing increases the color temperature (cooler), Turning the knob left while pressing decreases the color temperature (warmer).
 
-
   domain: automation
   input:
     base_topic:
@@ -75,11 +74,11 @@ blueprint:
         <br> (as set in `Zigbee2MQTT web UI`;).
       selector:
         text: {}
-        
 
     translate_friendly_name:
       name: Translate Friendly Name
-      description: 만약 `FRIENDLY NAME`이 한글이라면, 여기에 센서 이름을 영어로 적으세요.
+      description:
+        만약 `FRIENDLY NAME`이 한글이라면, 여기에 센서 이름을 영어로 적으세요.
         <br> (example; 안방 노브 = anbang_nobeu)
         <br> 공백은 언더바(_)로 치환해주세요.
         <br> !!! 한글로 적지 마세요 !!!
@@ -87,19 +86,19 @@ blueprint:
         <br> Even if you are not Korean, enter values here if the sensor `entity_id` are different from the English default.
       default: ""
 
-
     target_light:
       name: Target Light
-      description: Select the light entity to control brightness and color temperature.
+      description:
+        Select the light entity to control brightness and color temperature.
         # <br>- When you set up to control more than one light, the `brightness` of the lights will not be synchronized.
         # <br>- If you want to control multiple lights or just the ones that are `ON`, you can set it up like this (NOT recommended due to popcorning)
-        # <br>  `1. light.a, light.b` 
+        # <br>  `1. light.a, light.b`
         # <br>  `2. {{ expand('light.a','light.b') | selectattr('state', 'eq', 'on') | map(attribute='entity_id') | list }}`
         # <br> Color temperature control does not work with press rotation when setting up multiple lights
       selector:
         template: {}
 
-  # Restore Brightness option
+    # Restore Brightness option
     restore_brightness:
       name: Restore Brightness
       description: When "`TRUE`";
@@ -113,7 +112,8 @@ blueprint:
 
     color_temp_base:
       name: Default Color Temp setting
-      description: If the `TARGET LIGHT` is operating in a mode other than Color Temp (e.g., RGB, HS, etc.), 
+      description:
+        If the `TARGET LIGHT` is operating in a mode other than Color Temp (e.g., RGB, HS, etc.),
         <br>this setting determines the starting color temperature (within 1000K - 10000K) when pressing and turning the knob.
         <br>The selected value must not be higher than the `TARGET LIGHT`'s `min_color_temp` or lower than `max_color_temp`
       default: 4000
@@ -123,16 +123,13 @@ blueprint:
           max: 10000
           unit_of_measurement: "K"
 
-
-
-##### Press Action
+    ##### Press Action
     press_action:
       name: Press Action
       description: Set the action to be triggered when the knob is pressed.
       icon: mdi:gesture-tap-button
       collapsed: false
       input:
-        
         action_single:
           name: Single Action
           description: Action to take when `tapped`
@@ -152,17 +149,17 @@ blueprint:
           selector:
             action: {}
 
-##### Knob Action
+    ##### Knob Action
     knob_action:
       name: Knob Action Config
       description: Adjust the settings required for knob operation.
       icon: mdi:knob
       collapsed: true
       input:
-      
         transition_time:
           name: TRANSITION TIME
-          description: Set the transition value for smooth brightness and color temperature adjustments.
+          description:
+            Set the transition value for smooth brightness and color temperature adjustments.
             <br>The default value is `0.4`
           default: 0.4
           selector:
@@ -173,9 +170,38 @@ blueprint:
               unit_of_measurement: s
               mode: slider
 
+        knob_control_min_brightness:
+          name: Min Brightness Limit (%)
+          description:
+            최소 밝기 제한. 노브로 줄일 때 이 값(%) 아래로 어두워지거나 꺼지지 않습니다.
+            <br>기본값 `0`이면 제한 없이 꺼질 수 있습니다.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 99
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+
+        knob_control_max_brightness:
+          name: Max Brightness Limit (%)
+          description:
+            최대 밝기 제한. 노브로 키울 때 이 값(%) 이상으로 밝아지지 않습니다.
+            <br>기본값 `100`이면 제한 없습니다.
+          default: 100
+          selector:
+            number:
+              min: 1
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
+              mode: slider
+
         brightness_stepsize:
           name: Brightness Stepsize
-          description: Set the step size for brightness adjustment when moving the knob by one tick.
+          description:
+            Set the step size for brightness adjustment when moving the knob by one tick.
             <br>If set to the default value of `4`, each tick adjusts the brightness by approximately `2%`.
             <br>Adjust as needed after testing.
             <br>If you want to increase brightness by approximately `1%` per tick, set the value to `+2`.
@@ -191,7 +217,8 @@ blueprint:
 
         color_temp_stepsize:
           name: Color Temp Stepsize
-          description: Set the step size for adjusting the color temperature when turning the knob while pressing it.
+          description:
+            Set the step size for adjusting the color temperature when turning the knob while pressing it.
             <br>The default value is `5.0`.
           default: 5.0
           selector:
@@ -204,7 +231,8 @@ blueprint:
 
         color_temp_min:
           name: Min Color Temp Kelvin
-          description: Set the minimum color temperature within the target light's operational range. (Use Kelvin values)
+          description:
+            Set the minimum color temperature within the target light's operational range. (Use Kelvin values)
             <br>`NOTE!`
             <br> The color temperature will not go lower than the set value.
             <br> This value MUST BE LOWER than `Max Color Temp Kelvin`
@@ -217,8 +245,9 @@ blueprint:
 
         color_temp_max:
           name: Max Color Temp Kelvin
-          description: Set the maximum color temperature within the target light's operational range. (Use Kelvin values)
-            <br>`NOTE!` 
+          description:
+            Set the maximum color temperature within the target light's operational range. (Use Kelvin values)
+            <br>`NOTE!`
             <br> The color temperature will not go higher than the set value.
             <br> This value MUST BE HIGHER than `Min Color Temp Kelvin`.
           default: 10000
@@ -242,22 +271,25 @@ trigger_variables:
   translate_friendly_name: !input translate_friendly_name
 trigger:
   trigger: mqtt
-  topic: '{{ base_topic }}/{{ knob }}/action'
+  topic: "{{ base_topic }}/{{ knob }}/action"
 action:
   - variables:
-      ACTION: '{{ trigger.payload }}'
+      ACTION: "{{ trigger.payload }}"
       DEVICE_LOWER: >
         {% if translate_friendly_name != "" %}
           {{ translate_friendly_name | lower | regex_replace('[ .,@^-]', '_') }}
         {% else %}
           {{ knob | lower | regex_replace('[ .,@^-]', '_') }}
         {% endif %}
-      
+
       TARGET_LIGHT: !input target_light
 
       SENSOR_PRESSED: "sensor.{{ DEVICE_LOWER }}_action_rotation_button_state"
       SENSOR_BRIGHT_SIZE: "sensor.{{ DEVICE_LOWER }}_action_rotation_percent"
       SENSOR_TEMP_SIZE: "sensor.{{ DEVICE_LOWER }}_action_rotation_angle"
+
+      KNOB_MIN_BRIGHT_PCT: !input knob_control_min_brightness
+      KNOB_MAX_BRIGHT_PCT: !input knob_control_max_brightness
 
       BRIGHTNESS_STEPSIZE: !input brightness_stepsize
       TEMP_STEPSIZE: !input color_temp_stepsize
@@ -275,22 +307,22 @@ action:
 
   - choose:
       - conditions: "{{ ACTION != 'stop_rotating' }}"
-        sequence: 
+        sequence:
           - choose:
               - conditions: "{{ ACTION in ['single'] }}"
                 sequence: !input action_single
-                
+
               - conditions: "{{ ACTION in ['double'] }}"
                 sequence: !input action_double
-        
+
               - conditions: "{{ ACTION in ['hold'] }}"
                 sequence: !input action_hold
-        
+
               - conditions: "{{ ACTION in ['start_rotating', 'rotation'] }}"
-                sequence: 
+                sequence:
                   - choose:
                       - conditions: "{{ STATES_PRESSED == 'released' }}"
-                        sequence: 
+                        sequence:
                           - if:
                               - condition: template
                                 value_template: "{{ states(TARGET_LIGHT) == 'off' and RESTORE_BRIGHTNESS and STATES_BRIGHT_SIZE > 0 }}"
@@ -301,15 +333,31 @@ action:
                                 data:
                                   transition: "{{ TRANSITION_TIME }}"
                             else:
-                              - action: light.turn_on
-                                target:
-                                  entity_id: "{{ TARGET_LIGHT }}"
-                                data:
-                                  transition: "{{ TRANSITION_TIME }}"
-                                  brightness_step: "{{ STATES_BRIGHT_SIZE }}"
+                              # - action: light.turn_on
+                              #   target:
+                              #     entity_id: "{{ TARGET_LIGHT }}"
+                              #   data:
+                              #     transition: "{{ TRANSITION_TIME }}"
+                              #     brightness_step: "{{ STATES_BRIGHT_SIZE }}"
+                              - variables:
+                                  CURRENT_PCT: "{{ (state_attr(TARGET_LIGHT, 'brightness') | float(0) / 255 * 100) | round(0) }}"
+                                  STEP_PCT: "{{ (STATES_BRIGHT_SIZE | float / 255 * 100) | round(1) }}"
+                                  PROPOSED_PCT: "{{ (CURRENT_PCT | float + STEP_PCT | float) | round(0) }}"
+                                  CLAMPED_PCT: "{{ min(KNOB_MAX_BRIGHT_PCT | int, max(KNOB_MIN_BRIGHT_PCT | int, PROPOSED_PCT | int)) }}"
+                              - if:
+                                  - condition: template
+                                    value_template: "{{ CLAMPED_PCT | int == CURRENT_PCT | int }}"
+                                then: []
+                                else:
+                                  - action: light.turn_on
+                                    target:
+                                      entity_id: "{{ TARGET_LIGHT }}"
+                                    data:
+                                      transition: "{{ TRANSITION_TIME }}"
+                                      brightness_pct: "{{ CLAMPED_PCT }}"
 
                       - conditions: "{{ STATES_PRESSED == 'pressed' }}"
-                        sequence: 
+                        sequence:
                           - if:
                               - condition: template
                                 value_template: "{{ states(TARGET_LIGHT) == 'off' and STATES_TEMP_SIZE > 0 }}"
@@ -330,10 +378,10 @@ action:
                                     {% else %}
                                       {{ SAFE_TEMP_BASE }}
                                     {% endif %}
-                              
+
                               - action: light.turn_on
                                 target:
                                   entity_id: "{{ TARGET_LIGHT }}"
                                 data:
                                   transition: "{{ TRANSITION_TIME }}"
-                                  kelvin: "{{ min(COLOR_TEMP_MAX, max(COLOR_TEMP_MIN, CURRENT_TEMP + STATES_TEMP_SIZE)) }}"
+                                  color_temp_kelvin: "{{ min(COLOR_TEMP_MAX, max(COLOR_TEMP_MIN, CURRENT_TEMP + STATES_TEMP_SIZE)) }}"

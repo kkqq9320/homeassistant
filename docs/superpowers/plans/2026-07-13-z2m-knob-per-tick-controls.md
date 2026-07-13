@@ -113,7 +113,15 @@ Add these methods to the same test class:
         self.assertNotRegex(source, r"(?m)^\s+BRIGHTNESS_DELTA:$")
         self.assertNotRegex(source, r"(?m)^\s+STEP_PCT:$")
 
-    def test_one_tick_and_multi_tick_examples(self):
+    def test_blueprint_maps_packet_angles_to_per_tick_examples(self):
+        source = load_source()
+        tick_divisor = re.search(
+            r"ROTATION_TICKS: >-\s+"
+            r"{{ ROTATION_DELTA \| float\(0\) / (?P<degrees>\d+) }}",
+            source,
+        )
+        self.assertIsNotNone(tick_divisor)
+        degrees_per_tick = float(tick_divisor.group("degrees"))
         examples = (
             (12, 1, 1, 60),
             (60, 5, 5, 300),
@@ -123,7 +131,7 @@ Add these methods to the same test class:
 
         for angle_speed, ticks, brightness_pct, color_temp_k in examples:
             with self.subTest(angle_speed=angle_speed):
-                calculated_ticks = angle_speed / 12
+                calculated_ticks = angle_speed / degrees_per_tick
                 self.assertEqual(calculated_ticks, ticks)
                 self.assertEqual(calculated_ticks * 1, brightness_pct)
                 self.assertEqual(calculated_ticks * 60, color_temp_k)

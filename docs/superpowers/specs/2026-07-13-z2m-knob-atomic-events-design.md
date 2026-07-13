@@ -28,6 +28,13 @@ in the original design below.
   light's base values once and calculates absolute targets from the newest cumulative
   `action_rotation_angle`. This prevents a delayed integration state publication
   from dropping ticks and permits safe coalescing of intermediate packets.
+- Both `rotation` and `stop_rotating` may update the final angle and button state;
+  missing terminal fields preserve the last captured values. Worker freshness uses
+  the complete `(angle, button_state)` signature so a same-angle button change is
+  not skipped.
+- If an off-light startup needs a restore-only command, retain the first positive
+  packet's signature separately. Consume only that startup angle, then apply any
+  newer coalesced cumulative movement relative to the startup offset.
 
 ## Event model
 
@@ -39,6 +46,8 @@ in the original design below.
   snapshot rather than the integration's possibly delayed entity state.
 - Treat `stop_rotating`, another action, or a bounded inactivity timeout as the end
   of the active gesture.
+- Capture any angle or button state supplied by `stop_rotating` before marking the
+  listener complete; preserve the previous component when the stop packet omits it.
 - Use `action_rotation_button_state` from the same JSON message: `released` adjusts brightness and `pressed` adjusts color temperature.
 
 ## Press actions
@@ -74,7 +83,8 @@ remain sequential.
 A standard-library `unittest` suite checks root-topic filtering, the Core 2025.4
 scope prerequisite, global queued mode, listener/worker ownership, all Hold modes,
 Release dispatch, cumulative signed angles, coalesced packets, and delayed entity
-state. A deterministic Hold model injects Release during a deliberately slow action
+state. Rotation models also cover a newer stop angle, coalesced off-light startup,
+and same-angle button-state changes. A deterministic Hold model injects Release during a deliberately slow action
 and proves that no later repeat begins while Release still executes. A separate
 validation step parses the YAML and every Jinja template with externally supplied
 validation libraries.

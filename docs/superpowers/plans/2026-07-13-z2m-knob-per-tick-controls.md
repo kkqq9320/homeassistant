@@ -31,8 +31,15 @@ This addendum supersedes the packet-per-run rotation architecture and any Core
   signed ticks from that cumulative angle, and command absolute targets from the
   gesture base. A single worker applies the latest unapplied target, including the
   final captured angle, without rereading delayed light state.
+- Capture angle and button state supplied by both `rotation` and `stop_rotating`
+  before setting listener completion; preserve the previous component when a stop
+  field is absent. Track the complete applied `(angle, button_state)` signature.
+- Store the actual first positive off-light startup signature separately. When
+  brightness restore or pressed color startup needs a turn-on-only command, consume
+  only that first angle and then process any newer coalesced cumulative delta.
 - Add deterministic standard-library models for delayed entity-state publication,
-  coalesced cumulative packets, and Release during a deliberately slow Hold action.
+  a newer final stop angle, coalesced 12/24/36-degree startup packets in both button
+  modes, same-angle button changes, and Release during a deliberately slow Hold action.
   Retain YAML/Jinja parsing and representative arithmetic rendering.
 
 Final-review validation must cover the Core 2025.4 explanation, exact MQTT topic,

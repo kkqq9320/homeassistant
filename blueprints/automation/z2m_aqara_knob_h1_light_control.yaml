@@ -24,6 +24,9 @@ blueprint:
         `stop_rotating`. The listener keeps the newest cumulative
         `action_rotation_angle`, so intermediate rotation packets may be coalesced and
         no longer create separate top-level traces.
+      - The final stop packet can supply the last cumulative angle. When an off light
+        needs a restore-only startup command, only the first positive packet is
+        consumed; any later coalesced movement is still applied.
 
     ## Breaking Change: Direct Per-Tick Controls
       - The legacy step-size multiplier behavior is deprecated. The existing input IDs are retained, but their values now have direct physical meanings.
@@ -365,7 +368,16 @@ action:
         {{ trigger.payload_json.action_rotation_button_state |
           default('', true) }}
       ROTATION_LISTENER_DONE: false
+      ROTATION_PACKET_ANGLE: null
+      ROTATION_PACKET_BUTTON_STATE: null
+      ROTATION_STARTUP_ANGLE: >-
+        {{ ROTATION_LATEST_ANGLE | float(0)
+          if ROTATION_LATEST_ANGLE | float(0) > 0 else none }}
+      ROTATION_STARTUP_BUTTON_STATE: >-
+        {{ ROTATION_LATEST_BUTTON_STATE
+          if ROTATION_STARTUP_ANGLE is not none else none }}
       ROTATION_APPLIED_ANGLE: null
+      ROTATION_APPLIED_BUTTON_STATE: null
       ROTATION_ANGLE_OFFSET: 0
       ROTATION_OFF_STARTUP_PENDING: >-
         {{ states(TARGET_LIGHT) == 'off' }}
@@ -509,19 +521,51 @@ action:
                                 ROTATION_LATEST_ACTION: >-
                                   {{ wait.trigger.payload_json.action |
                                     default('') }}
+                                ROTATION_PACKET_ANGLE: >-
+                                  {% set packet_angle =
+                                    wait.trigger.payload_json.action_rotation_angle |
+                                    default(none) %}
+                                  {{ ROTATION_LATEST_ANGLE
+                                    if packet_angle is none else
+                                    wait.trigger.payload_json.action_rotation_angle | float(0) }}
+                                ROTATION_PACKET_BUTTON_STATE: >-
+                                  {% set packet_button =
+                                    wait.trigger.payload_json.action_rotation_button_state |
+                                    default(none) %}
+                                  {{ ROTATION_LATEST_BUTTON_STATE
+                                    if packet_button is none else packet_button }}
 
                             - if:
                                 - condition: template
                                   value_template: >-
-                                    {{ ROTATION_LATEST_ACTION ==
-                                      'rotation' }}
+                                    {{ ROTATION_LATEST_ACTION in ['rotation', 'stop_rotating'] }}
                               then:
                                 - variables:
                                     ROTATION_LATEST_ANGLE: >-
-                                      {{ wait.trigger.payload_json.action_rotation_angle | float(0) }}
+                                      {{ ROTATION_PACKET_ANGLE | float(0) }}
                                     ROTATION_LATEST_BUTTON_STATE: >-
-                                      {{ wait.trigger.payload_json.action_rotation_button_state |
-                                        default('', true) }}
+                                      {{ ROTATION_PACKET_BUTTON_STATE }}
+
+                                - if:
+                                    - condition: template
+                                      value_template: >-
+                                        {{ ROTATION_STARTUP_ANGLE is none and
+                                          ROTATION_PACKET_ANGLE | float(0) > 0 }}
+                                  then:
+                                    - variables:
+                                        ROTATION_STARTUP_ANGLE: >-
+                                          {{ ROTATION_PACKET_ANGLE | float(0) }}
+                                        ROTATION_STARTUP_BUTTON_STATE: >-
+                                          {{ ROTATION_PACKET_BUTTON_STATE }}
+
+                                - if:
+                                    - condition: template
+                                      value_template: >-
+                                        {{ ROTATION_LATEST_ACTION ==
+                                          'stop_rotating' }}
+                                  then:
+                                    - variables:
+                                        ROTATION_LISTENER_DONE: true
                               else:
                                 - variables:
                                     ROTATION_LISTENER_DONE: true
@@ -544,13 +588,31 @@ action:
                               value_template: >-
                                 {{ ROTATION_APPLIED_ANGLE is none or
                                   ROTATION_APPLIED_ANGLE | float(0) !=
-                                    ROTATION_LATEST_ANGLE | float(0) }}
+                                    ROTATION_LATEST_ANGLE | float(0) or
+                                  ROTATION_APPLIED_BUTTON_STATE !=
+                                    ROTATION_LATEST_BUTTON_STATE }}
                           then:
                             - variables:
+                                ROTATION_PROCESS_STARTUP: >-
+                                  {{ ROTATION_OFF_STARTUP_PENDING and
+                                    ROTATION_STARTUP_ANGLE is not none and
+                                    (ROTATION_STARTUP_BUTTON_STATE == 'pressed' or
+                                      RESTORE_BRIGHTNESS) and
+                                    (ROTATION_APPLIED_ANGLE is none or
+                                      ROTATION_APPLIED_ANGLE | float(0) !=
+                                        ROTATION_STARTUP_ANGLE | float(0) or
+                                      ROTATION_APPLIED_BUTTON_STATE !=
+                                        ROTATION_STARTUP_BUTTON_STATE) }}
+
+                            - variables:
                                 ROTATION_WORK_ANGLE: >-
-                                  {{ ROTATION_LATEST_ANGLE | float(0) }}
+                                  {{ ROTATION_STARTUP_ANGLE | float(0)
+                                    if ROTATION_PROCESS_STARTUP else
+                                    ROTATION_LATEST_ANGLE | float(0) }}
                                 ROTATION_WORK_BUTTON_STATE: >-
-                                  {{ ROTATION_LATEST_BUTTON_STATE }}
+                                  {{ ROTATION_STARTUP_BUTTON_STATE
+                                    if ROTATION_PROCESS_STARTUP else
+                                    ROTATION_LATEST_BUTTON_STATE }}
 
                             - variables:
                                 ROTATION_TICKS: >-
@@ -663,6 +725,8 @@ action:
                             - variables:
                                 ROTATION_APPLIED_ANGLE: >-
                                   {{ ROTATION_WORK_ANGLE | float(0) }}
+                                ROTATION_APPLIED_BUTTON_STATE: >-
+                                  {{ ROTATION_WORK_BUTTON_STATE }}
                           else:
                             - delay:
                                 milliseconds: 25
@@ -672,4 +736,6 @@ action:
                             {{ ROTATION_LISTENER_DONE and
                               ROTATION_APPLIED_ANGLE is not none and
                               ROTATION_APPLIED_ANGLE | float(0) ==
-                                ROTATION_LATEST_ANGLE | float(0) }}
+                                ROTATION_LATEST_ANGLE | float(0) and
+                              ROTATION_APPLIED_BUTTON_STATE ==
+                                ROTATION_LATEST_BUTTON_STATE }}

@@ -31,6 +31,12 @@ is superseded by gesture-level cumulative processing:
 - Snapshot base brightness and color temperature once at gesture start. Every
   command is an absolute target computed from that base plus the cumulative signed
   angle. Never rebase from an entity state that may still reflect an earlier command.
+- Capture cumulative angle and button state from both `rotation` and
+  `stop_rotating` before completing the listener. A missing stop field preserves its
+  previous value, and worker freshness compares the complete angle/button signature.
+- Retain the first positive off-light startup packet separately. A restore-only
+  startup consumes that first angle, not a later coalesced angle, so subsequent
+  movement is still applied from the gesture offset.
 
 ## Tick and Event Model
 
@@ -106,7 +112,9 @@ rounding and configured min/max clamps. The base values are captured once at
 gesture start; later commands do not reread brightness or color temperature. If a
 restore-only positive startup packet is consumed, its cumulative angle becomes the
 gesture offset so later movement starts from the restored base without double-counting
-the startup packet.
+the startup packet. The listener stores that first positive packet separately, so
+12/24/36-degree packets coalesced before the worker produce a 12-degree startup
+offset followed by the remaining 24 degrees of movement.
 
 The implementation must not retain the legacy `/ 3.6 / 3`, `2.54`, or the
 conversion of the requested delta into a 0-255 value and back. Converting the
@@ -155,6 +163,9 @@ Use the following facts when updating the Home Assistant forum post:
 > listener active beside a sequential worker, so light commands remain sequential.
 > Rotation now uses one gesture's cumulative angle and creates fewer intermediate
 > automation traces.
+> The final stop packet is honored, same-angle button-state changes are processed,
+> and restore-only startup consumes only the first positive packet even if later
+> packets arrive before the worker runs.
 
 The final forum text may add a release version or link, but must not change the
 migration facts above.
@@ -163,6 +174,8 @@ migration facts above.
 
 - Missing, null, or nonnumeric cumulative `action_rotation_angle` resolves to zero.
 - `stop_rotating` ends the gesture listener and causes no top-level light run.
+- A stop packet carrying a newer cumulative angle updates the final target before
+  the listener ends; absent angle or button fields preserve the last values.
 - Brightness and color-temperature results remain clamped to their configured
   ranges.
 - Global queued automation mode remains unchanged. The one gesture worker is the
@@ -183,6 +196,9 @@ Extend the standard-library tests to prove:
 - Coalescing intermediate packets preserves the final absolute target.
 - A delayed entity-state simulation ends at the full cumulative target rather than
   losing ticks.
+- Coalesced 12/24/36-degree packets consume only 12 degrees for brightness restore
+  or pressed off-light startup, then apply the remaining 24 degrees.
+- A same-angle pressed/released change is processed as a fresh worker signature.
 - Legacy brightness coefficients and descriptions are absent.
 - The Blueprint description contains the breaking-change and migration notice.
 

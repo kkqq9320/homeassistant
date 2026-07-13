@@ -350,6 +350,57 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertNotIn("/ 3.6 / 3", source)
         self.assertNotIn("2.54", source)
 
+    def test_missing_group_brightness_uses_members_instead_of_zero(self):
+        source = load_source()
+        brightness_base = re.search(
+            r"(?ms)^      ROTATION_BASE_BRIGHTNESS_PCT: >-\n.*?"
+            r"(?=^      ROTATION_LIGHT_TEMP_MIN: >-\n)",
+            source,
+        )
+        self.assertIsNotNone(brightness_base)
+        block = brightness_base.group(0)
+
+        self.assertIn("states(TARGET_LIGHT) == 'off'", block)
+        self.assertIn("state_attr(TARGET_LIGHT, 'entity_id')", block)
+        self.assertIn("expand(member_ids)", block)
+        self.assertIn(
+            "selectattr('attributes.brightness', 'number')",
+            block,
+        )
+        self.assertIn("member_brightness | average", block)
+        self.assertIn("{{ none }}", block)
+        self.assertNotIn(
+            "state_attr(TARGET_LIGHT, 'brightness') |\n"
+            "          float(0)",
+            block,
+        )
+        self.assertIn(
+            "ROTATION_BASE_BRIGHTNESS_PCT is number",
+            source,
+        )
+
+    def test_missing_group_color_temp_uses_members_instead_of_default(self):
+        source = load_source()
+        color_temp_base = re.search(
+            r"(?ms)^      ROTATION_BASE_COLOR_TEMP_K: >-\n.*?"
+            r"(?=^  - variables:\n"
+            r"      ROTATION_LAST_BRIGHTNESS_TARGET: >-\n)",
+            source,
+        )
+        self.assertIsNotNone(color_temp_base)
+        block = color_temp_base.group(0)
+
+        self.assertIn("states(TARGET_LIGHT) == 'off'", block)
+        self.assertIn("state_attr(TARGET_LIGHT, 'entity_id')", block)
+        self.assertIn("expand(member_ids)", block)
+        self.assertIn(
+            "selectattr('attributes.color_temp_kelvin', 'number')",
+            block,
+        )
+        self.assertIn("member_color_temp | average", block)
+        self.assertIn("{{ none }}", block)
+        self.assertIn("ROTATION_BASE_COLOR_TEMP_K is number", source)
+
     def test_cumulative_angle_model_handles_signed_and_coalesced_packets(self):
         positive = RotationGestureModel(base_brightness_pct=40)
         for angle in (12, 24, 60):

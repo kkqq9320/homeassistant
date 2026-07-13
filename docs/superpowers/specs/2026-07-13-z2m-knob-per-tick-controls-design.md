@@ -121,6 +121,13 @@ bounded wait and stores the first positive packet separately, so
 12/24/36-degree packets coalesced before the worker produce a 12-degree startup
 offset followed by the remaining 24 degrees of movement.
 
+For a light group, its aggregate brightness or color-temperature attribute may be
+temporarily absent while member states are propagating. In that case, use the average
+of the available numeric member attributes as the gesture base. If an already-on
+target and all of its members still lack the applicable attribute, skip that control
+command instead of coercing the missing value to 0% brightness or the configured
+default color temperature. Off-light startup behavior remains unchanged.
+
 The implementation must not retain the legacy `/ 3.6 / 3`, `2.54`, or the
 conversion of the requested delta into a 0-255 value and back. Converting the
 light entity's current `brightness` attribute from 0-255 to a percentage is
@@ -173,6 +180,9 @@ Use the following facts when updating the Home Assistant forum post:
 > The final stop packet is honored, same-angle button-state changes are processed,
 > and restore-only startup consumes only the first positive packet even if later
 > packets arrive before the worker runs.
+> A follow-up fix prevents rapid repeated turns on light groups from briefly moving
+> backward when the group's aggregate brightness or color-temperature attribute is
+> delayed; available member values are used as the gesture base instead.
 
 The final forum text may add a release version or link, but must not change the
 migration facts above.
@@ -209,6 +219,8 @@ Extend the standard-library tests to prove:
 - Coalesced 12/24/36-degree packets consume only 12 degrees for brightness restore
   or pressed off-light startup, then apply the remaining 24 degrees.
 - A same-angle pressed/released change is processed as a fresh worker signature.
+- A temporarily missing light-group aggregate value falls back to available member
+  brightness or color-temperature values instead of 0% or the configured default.
 - Legacy brightness coefficients and descriptions are absent.
 - The Blueprint description contains the breaking-change and migration notice.
 

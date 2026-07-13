@@ -32,6 +32,9 @@ blueprint:
       - The final stop packet can supply the last cumulative angle. When an off light
         needs a restore-only startup command, only the first positive packet is
         consumed; any later coalesced movement is still applied.
+      - If a light group's aggregate brightness or color-temperature attribute is
+        temporarily unavailable, available member values provide the gesture base.
+        A missing value is never treated as 0% brightness.
 
     ## Breaking Change: Direct Per-Tick Controls
       - The legacy step-size multiplier behavior is deprecated. The existing input IDs are retained, but their values now have direct physical meanings.
@@ -391,8 +394,23 @@ action:
 
   - variables:
       ROTATION_BASE_BRIGHTNESS_PCT: >-
-        {{ (state_attr(TARGET_LIGHT, 'brightness') |
-          float(0) / 255 * 100) | round(0) }}
+        {% set target_brightness =
+          state_attr(TARGET_LIGHT, 'brightness') %}
+        {% set member_ids =
+          state_attr(TARGET_LIGHT, 'entity_id') |
+            default([], true) %}
+        {% set member_brightness = expand(member_ids) |
+          selectattr('attributes.brightness', 'number') |
+          map(attribute='attributes.brightness') | list %}
+        {% if states(TARGET_LIGHT) == 'off' %}
+          {{ KNOB_MIN_BRIGHT_PCT | float(0) }}
+        {% elif target_brightness is number %}
+          {{ (target_brightness | float / 255 * 100) | round(0) }}
+        {% elif member_brightness | count > 0 %}
+          {{ ((member_brightness | average) / 255 * 100) | round(0) }}
+        {% else %}
+          {{ none }}
+        {% endif %}
       ROTATION_LIGHT_TEMP_MIN: >-
         {{ state_attr(TARGET_LIGHT, 'min_color_temp_kelvin') |
           int(TEMP_MIN | int) }}
@@ -410,18 +428,32 @@ action:
       ROTATION_BASE_COLOR_TEMP_K: >-
         {% set gesture_start_temp =
           state_attr(TARGET_LIGHT, 'color_temp_kelvin') %}
-        {% if gesture_start_temp is not none %}
-          {{ gesture_start_temp | int }}
-        {% else %}
+        {% set member_ids =
+          state_attr(TARGET_LIGHT, 'entity_id') |
+            default([], true) %}
+        {% set member_color_temp = expand(member_ids) |
+          selectattr('attributes.color_temp_kelvin', 'number') |
+          map(attribute='attributes.color_temp_kelvin') | list %}
+        {% if states(TARGET_LIGHT) == 'off' %}
           {{ min(ROTATION_COLOR_TEMP_MAX | int,
             max(ROTATION_COLOR_TEMP_MIN | int, TEMP_BASE | int)) }}
+        {% elif gesture_start_temp is number %}
+          {{ gesture_start_temp | int }}
+        {% elif member_color_temp | count > 0 %}
+          {{ min(ROTATION_COLOR_TEMP_MAX | int,
+            max(ROTATION_COLOR_TEMP_MIN | int,
+              member_color_temp | average | int)) }}
+        {% else %}
+          {{ none }}
         {% endif %}
 
   - variables:
       ROTATION_LAST_BRIGHTNESS_TARGET: >-
-        {{ ROTATION_BASE_BRIGHTNESS_PCT | round(0) }}
+        {{ ROTATION_BASE_BRIGHTNESS_PCT | round(0)
+          if ROTATION_BASE_BRIGHTNESS_PCT is number else none }}
       ROTATION_LAST_COLOR_TEMP_TARGET: >-
-        {{ ROTATION_BASE_COLOR_TEMP_K | int }}
+        {{ ROTATION_BASE_COLOR_TEMP_K | int
+          if ROTATION_BASE_COLOR_TEMP_K is number else none }}
 
   - choose:
       - conditions: "{{ ACTION == 'single' }}"
@@ -629,7 +661,8 @@ action:
                             - choose:
                                 - conditions: >-
                                     {{ ROTATION_WORK_BUTTON_STATE ==
-                                      'released' }}
+                                      'released' and
+                                      ROTATION_BASE_BRIGHTNESS_PCT is number }}
                                   sequence:
                                     - variables:
                                         BRIGHTNESS_TARGET_PCT: >-
@@ -709,7 +742,8 @@ action:
 
                                 - conditions: >-
                                     {{ ROTATION_WORK_BUTTON_STATE ==
-                                      'pressed' }}
+                                      'pressed' and
+                                      ROTATION_BASE_COLOR_TEMP_K is number }}
                                   sequence:
                                     - variables:
                                         COLOR_TEMP_TARGET_K: >-

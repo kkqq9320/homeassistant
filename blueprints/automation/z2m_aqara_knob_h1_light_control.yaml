@@ -6,7 +6,8 @@ blueprint:
       - Supports Zigbee2MQTT versions, including 2.0.0 and later updates. (It is expected to work on lower versions as well.)
 
     ## Prerequisites
-      - Requires at least **Home Assistant Core `2025.4`** version.
+      - Requires **Home Assistant Core `2025.4` or newer**. This minimum is
+        enforced by the Blueprint metadata, so older Core versions cannot import it.
       - Home Assistant 2025.4 made variables accessible across nested and parallel action
         scopes. The Hold and rotation listeners rely on that shared run-scope behavior.
       - The knob only works when connected via `Zigbee2MQTT`.
@@ -76,6 +77,8 @@ blueprint:
       - Turning the knob right while pressing increases the color temperature (cooler), Turning the knob left while pressing decreases the color temperature (warmer).
 
   domain: automation
+  homeassistant:
+    min_version: 2025.4.0
   input:
     base_topic:
       name: Base Topic

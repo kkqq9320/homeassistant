@@ -545,6 +545,10 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
 
         self.assertIn("Home Assistant Core `2025.4`", blueprint)
         self.assertNotIn("Home Assistant Core `2024.08`", blueprint)
+        self.assertRegex(
+            blueprint,
+            r"(?m)^  homeassistant:\n    min_version: 2025\.4\.0$",
+        )
         for document in (blueprint, *documents):
             with self.subTest(document=document[:40]):
                 self.assertIn("2025.4", document)

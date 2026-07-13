@@ -56,12 +56,12 @@ is superseded by gesture-level cumulative processing:
 
 Examples:
 
-| Cumulative gesture angle | Tick delta | At 1%/tick | At 60 K/tick |
+| Cumulative gesture angle | Tick delta | At 1%/tick | At 100 K/tick |
 | ---: | ---: | ---: | ---: |
-| 12 | 1 | 1% | 60 K |
-| 60 | 5 | 5% | 300 K |
-| -24 | -2 | -2% | -120 K |
-| 84 | 7 | 7% | 420 K |
+| 12 | 1 | 1% | 100 K |
+| 60 | 5 | 5% | 500 K |
+| -24 | -2 | -2% | -200 K |
+| 84 | 7 | 7% | 700 K |
 
 ## Blueprint Inputs
 
@@ -73,14 +73,12 @@ labels, descriptions, units, ranges, and defaults to direct per-tick units.
 
 - Existing input ID: `brightness_stepsize`
 - UI meaning: percentage-point brightness change per 12-degree tick
-- Range: 1 through 10
+- Range: 1 through 100
 - Step: 1
 - Unit: `%/tick`
-- Default: 4
+- Default: 2
 
-The default preserves approximately the current real-world response: the
-existing formula produces about 4% for a captured 12-degree event when its
-legacy stepsize is 4.
+The default provides a gentler `2%` brightness change for each 12-degree tick.
 
 ### Color Temperature per Tick
 
@@ -89,10 +87,10 @@ legacy stepsize is 4.
 - Range: 1 through 10000
 - Step: 1
 - Unit: `K/tick`
-- Default: 60
+- UI mode: slider
+- Default: 100
 
-The default preserves the current response because the existing default
-multiplier is 5 K per degree and `12 * 5 = 60 K` per tick.
+The default changes color temperature by `100 K` for each 12-degree pressed tick.
 
 Home Assistant number-selector bounds are static numeric configuration. The
 color-temperature per-tick selector therefore uses a fixed upper bound of
@@ -134,6 +132,19 @@ light entity's current `brightness` attribute from 0-255 to a percentage is
 still required. Applying the requested change in direct percentage points
 removes the avoidable round trip and its extra rounding.
 
+## Target Light Selection
+
+- `target_light` uses Home Assistant's entity selector, filters the UI to the
+  `light` domain, and accepts exactly one entity.
+- Direct entity lists and Jinja templates are not supported. This keeps the
+  selected value compatible with state lookups and one deterministic service
+  target throughout a rotation gesture.
+- To control multiple lights, users select one group entity created with either
+  the native [Home Assistant Light Group](https://www.home-assistant.io/integrations/group/#light-groups)
+  or [Cheerpipe Relative Light Group](https://github.com/Cheerpipe/relative-light-group).
+- The existing fallback that reads available member attributes from a light
+  group's `entity_id` attribute remains unchanged.
+
 ## Compatibility and Migration
 
 This is a breaking semantic change for saved Blueprint inputs:
@@ -142,19 +153,32 @@ This is a breaking semantic change for saved Blueprint inputs:
   variables shared across nested and parallel action scopes.
 - The IDs `brightness_stepsize` and `color_temp_stepsize` remain accepted, but
   their old multiplier meaning is deprecated.
-- A saved brightness value of `4` becomes exactly `4%/tick`; this is close to
-  its current observed effect and normally needs no adjustment.
-- A saved brightness value above `10` is outside the new selector range and
-  must be changed to a value from `1` through `10` before saving the automation.
+- A saved brightness value of `4` becomes exactly `4%/tick`. The new Blueprint
+  default is `2%/tick`; select `2` for the gentler new default response.
+- A saved brightness value above `100` is outside the selector range and
+  must be changed to a value from `1` through `100` before saving the automation.
 - A saved color-temperature value of `5` becomes `5 K/tick`, not the previous
   effective `60 K/tick`. Users who want the old response must change it to
-  `60` after updating.
+  `60` after updating; the new Blueprint default is `100 K/tick`.
 - The Blueprint description must contain a clearly labeled breaking-change
   notice telling users to open each automation made from the Blueprint, review
   both per-tick inputs, and save it again.
 - The old step-size terminology must be marked deprecated in the migration
   notice even though the input IDs remain unchanged for configuration
   continuity.
+- The obsolete `translate_friendly_name` compatibility input is removed. It was
+  never referenced by the atomic MQTT implementation and has no replacement.
+  Current Home Assistant validates missing Blueprint inputs but tolerates an old
+  extra saved key, so existing automations continue loading and discard it when
+  resaved. This removal does not apply to the required `knob` input, which remains
+  the Zigbee2MQTT device-topic segment used by the single root-topic trigger.
+- `target_light` changes from a template selector to a single `light` entity
+  selector. Existing automations that saved a template or entity list must select
+  one light or one light-group entity in the UI and save the automation again.
+- `hold_repeat_max_duration` now defaults to 11 seconds and has an 11-second
+  selector maximum. Existing saved values above 11 must be changed before saving.
+  This software deadline cannot prevent the knob's hardware networking mode, so
+  the physical button must be released before 10 seconds.
 
 ## Forum Update Draft
 
@@ -164,13 +188,20 @@ Use the following facts when updating the Home Assistant forum post:
 > This Blueprint now requires Home Assistant Core 2025.4 because Hold and rotation
 > coordination relies on variables shared across nested and parallel action scopes.
 > One Aqara knob tick is treated as 12 degrees. Brightness can now be configured
-> from 1-10% per tick (default 4%), and pressed-rotation color temperature from
-> 1-10000 K per tick (default 60 K). A five-tick/60-degree event applies five
+> from 1-100% per tick (default 2%), and pressed-rotation color temperature from
+> 1-10000 K per tick (default 100 K). A five-tick/60-degree turn applies five
 > times the selected value. Existing step-size multiplier semantics are
 > deprecated. After updating, open every automation created from this Blueprint,
 > review the two rotation values, and save. In particular, change a previous
 > color-temperature stepsize of 5 to 60 K/tick to preserve the old response,
-> and replace any previous brightness value above 10 with a value from 1-10.
+> and replace any previous brightness value above 100 with a value from 1-100.
+> The unused `translate_friendly_name` compatibility input has been removed and
+> needs no replacement. The `knob` input remains required because the Blueprint's
+> single MQTT trigger subscribes to `base_topic/knob`.
+> Target Light is now a single `light` entity selector. To control multiple lights,
+> select one group entity created with Home Assistant Light Group or Cheerpipe
+> Relative Light Group. Direct entity lists and templates are no longer supported;
+> re-select the Target Light and save any affected existing automation.
 > The global automation mode is parallel so a rotation listener starts immediately
 > even while a configured press action is running. Only `start_rotating` creates a
 > top-level rotation run; intermediate packets stay inside its listener, and one
@@ -183,6 +214,26 @@ Use the following facts when updating the Home Assistant forum post:
 > A follow-up fix prevents rapid repeated turns on light groups from briefly moving
 > backward when the group's aggregate brightness or color-temperature attribute is
 > delayed; available member values are used as the gesture base instead.
+>
+> **Hold Repeat Mode:** `Do not repeat` runs Hold Action once and later runs Release
+> Action once in a separate parallel automation run. `Repeat Hold Action` repeats
+> the same Hold Action while the button is held. `Hold once, then repeat a
+> separate action` runs the Hold Action once and repeats only the separate Hold
+> Repeat Action while the button is held. Repeating stops on `release`, another knob
+> action, or the maximum duration. A `release` event also executes Release Action
+> once. Release Action is optional: **LEAVE THIS EMPTY** when no release behavior is
+> needed, and the `release` event performs no action.
+> In the Blueprint UI, Press Action contains only Single Action, Double Action,
+> and Hold Action. Hold Repeat Mode, repeat timing/actions, and Release Action are
+> grouped in a separate Hold Repeat & Release section that is collapsed by default.
+> Existing input IDs are unchanged.
+>
+> **Aqara hardware warning:** Do not keep the physical ZNXNKG02LM knob button
+> pressed for 10 seconds. The device manual defines a 10-second press as the command
+> to enter networking mode, which can interrupt the current Zigbee connection and
+> require pairing again. Hold Repeat Maximum Duration now defaults to 11 seconds
+> and cannot be set higher, but it is only a software loop limit and cannot prevent
+> this device-level behavior. **RELEASE THE PHYSICAL BUTTON BEFORE 10 SECONDS.**
 
 The final forum text may add a release version or link, but must not change the
 migration facts above.
@@ -204,12 +255,14 @@ migration facts above.
 
 Extend the standard-library tests to prove:
 
-- The brightness selector exposes 1-10 `%/tick` with default 4.
-- The color-temperature selector exposes 1-10000 `K/tick` with default 60.
+- The brightness selector exposes 1-100 `%/tick` with default 2.
+- At 100 `%/tick`, repeated positive ticks clamp at the configured maximum
+  brightness and do not issue duplicate service commands for the same target.
+- The color-temperature selector exposes 1-10000 `K/tick` with default 100.
 - With brightness set to 1, angles 12, 60, -24, and 84 produce 1%, 5%, -2%,
   and 7% respectively.
-- With color temperature set to 60, the same angles produce 60 K, 300 K,
-  -120 K, and 420 K respectively.
+- With color temperature set to 100, the same angles produce 100 K, 500 K,
+  -200 K, and 700 K respectively.
 - Rotation reads cumulative `action_rotation_angle` in one gesture run, and the
   Blueprint uses global parallel mode without making intermediate packets top-level
   triggers.
@@ -222,6 +275,8 @@ Extend the standard-library tests to prove:
 - A temporarily missing light-group aggregate value falls back to available member
   brightness or color-temperature values instead of 0% or the configured default.
 - Legacy brightness coefficients and descriptions are absent.
+- Target Light is a single UI-selected `light` entity, and the description directs
+  multi-light users to Home Assistant Light Group or Cheerpipe Relative Light Group.
 - The Blueprint description contains the breaking-change and migration notice.
 
 After the focused tests pass, parse the YAML, parse every Jinja template, render
@@ -232,11 +287,19 @@ user-facing output copy is byte-identical to the tested Blueprint.
 
 - Home Assistant Blueprint selectors:
   <https://www.home-assistant.io/docs/blueprint/selectors/>
+- Home Assistant Light Group:
+  <https://www.home-assistant.io/integrations/group/#light-groups>
+- Cheerpipe Relative Light Group:
+  <https://github.com/Cheerpipe/relative-light-group>
 - Home Assistant automation trigger data:
   <https://www.home-assistant.io/docs/automation/templating/>
 - Home Assistant 2025.4 variable-scope change:
   <https://www.home-assistant.io/blog/2025/04/02/release-20254/>
 - Home Assistant script variable and parallel-action scopes:
   <https://www.home-assistant.io/docs/scripts/>
+- Home Assistant Blueprint input validation and substitution:
+  <https://github.com/home-assistant/core/blob/dev/homeassistant/components/blueprint/models.py>
 - Zigbee2MQTT Aqara ZNXNKG02LM exposes:
   <https://www.zigbee2mqtt.io/devices/ZNXNKG02LM.html>
+- Aqara ZNXNKG02LM device manual (10-second press enters networking mode):
+  <https://cdn.aqara.com/cdn/website/mainland/static/lodash-4.17.15/%E6%99%BA%E8%83%BD%E6%97%8B%E9%92%AE%E5%BC%80%E5%85%B3%20H1%EF%BC%88%E6%97%A0%E7%BA%BF%E7%89%88%EF%BC%89.pdf>

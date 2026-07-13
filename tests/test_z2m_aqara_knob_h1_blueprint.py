@@ -10,6 +10,14 @@ BLUEPRINT_PATH = (
     / "z2m_aqara_knob_h1_light_control.yaml"
 )
 REPOSITORY_ROOT = Path(__file__).parents[1]
+ROOT_README_PATH = REPOSITORY_ROOT / "README.md"
+KNOB_README_PATH = (
+    REPOSITORY_ROOT
+    / "blueprints"
+    / "automation"
+    / "z2m_aqara_knob_h1_light_control"
+    / "README.md"
+)
 ATOMIC_DESIGN_PATH = (
     REPOSITORY_ROOT
     / "docs"
@@ -79,8 +87,8 @@ class RotationGestureModel:
         *,
         base_brightness_pct=40,
         base_color_temp_k=4000,
-        brightness_pct_per_tick=4,
-        color_temp_k_per_tick=60,
+        brightness_pct_per_tick=2,
+        color_temp_k_per_tick=100,
         light_is_off=False,
         restore_brightness=False,
         restored_brightness_pct=None,
@@ -106,6 +114,7 @@ class RotationGestureModel:
         self.pending_brightness_publications = []
         self.brightness_commands = []
         self.color_temp_commands = []
+        self.last_brightness_target = base_brightness_pct
 
     def listener_capture(self, angle=MISSING, button_state=MISSING):
         if angle is not MISSING:
@@ -167,6 +176,7 @@ class RotationGestureModel:
                 and self.restored_brightness_pct is not None
             ):
                 self.base_brightness_pct = self.restored_brightness_pct
+                self.last_brightness_target = self.restored_brightness_pct
             if (
                 work_button_state == "pressed"
                 and self.restored_color_temp_k is not None
@@ -181,8 +191,10 @@ class RotationGestureModel:
                 0,
                 100,
             )
-            self.brightness_commands.append(target)
-            self.pending_brightness_publications.append(target)
+            if round(target) != round(self.last_brightness_target):
+                self.brightness_commands.append(target)
+                self.pending_brightness_publications.append(target)
+                self.last_brightness_target = target
         else:
             target = clamp(
                 self.base_color_temp_k + ticks * self.color_temp_k_per_tick,
@@ -232,6 +244,30 @@ class HoldRepeatModel:
 
 
 class AqaraKnobBlueprintTest(unittest.TestCase):
+    def test_root_and_dedicated_readmes_link_the_knob_and_import_button(self):
+        self.assertTrue(KNOB_README_PATH.is_file())
+        root_readme = ROOT_README_PATH.read_text(encoding="utf-8")
+        knob_readme = KNOB_README_PATH.read_text(encoding="utf-8")
+        dedicated_path = (
+            "blueprints/automation/"
+            "z2m_aqara_knob_h1_light_control/README.md"
+        )
+        import_url = (
+            "https://my.home-assistant.io/redirect/blueprint_import/"
+            "?blueprint_url=https%3A%2F%2Fgithub.com%2Fkkqq9320%2F"
+            "homeassistant%2Fblob%2Fmain%2Fblueprints%2Fautomation%2F"
+            "z2m_aqara_knob_h1_light_control.yaml"
+        )
+
+        self.assertIn(f"]({dedicated_path})", root_readme)
+        for readme in (root_readme, knob_readme):
+            self.assertIn(import_url, readme)
+        self.assertIn("## Import Blueprint to Home Assistant", knob_readme)
+        self.assertIn("## Breaking changes", knob_readme)
+        self.assertIn("## Hold Repeat & Release", knob_readme)
+        self.assertIn("Home Assistant Light Group", knob_readme)
+        self.assertIn("Cheerpipe Relative Light Group", knob_readme)
+
     def test_uses_one_root_topic_trigger_for_every_action_message(self):
         source = load_source()
 
@@ -287,16 +323,25 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         )
 
         self.assertIn("name: Brightness per Tick", brightness)
-        self.assertRegex(brightness, r"(?m)^          default: 4$")
+        self.assertRegex(brightness, r"(?m)^          default: 2$")
         self.assertRegex(brightness, r"(?m)^              min: 1$")
-        self.assertRegex(brightness, r"(?m)^              max: 10$")
+        self.assertRegex(brightness, r"(?m)^              max: 100$")
         self.assertIn('unit_of_measurement: "%/tick"', brightness)
+        self.assertIn("`2` means brightness changes by `2%` per tick", brightness)
+        self.assertIn("can reach the configured brightness limit in one tick", brightness)
+        self.assertNotIn("packet changes brightness", brightness)
 
         self.assertIn("name: Color Temperature per Tick", color_temp)
-        self.assertRegex(color_temp, r"(?m)^          default: 60$")
+        self.assertRegex(color_temp, r"(?m)^          default: 100$")
         self.assertRegex(color_temp, r"(?m)^              min: 1$")
         self.assertRegex(color_temp, r"(?m)^              max: 10000$")
         self.assertIn('unit_of_measurement: "K/tick"', color_temp)
+        self.assertRegex(color_temp, r"(?m)^              mode: slider$")
+        self.assertIn(
+            "`100` means color temperature changes by `100 K` per tick",
+            color_temp,
+        )
+        self.assertNotIn("packet changes color temperature", color_temp)
 
     def test_documents_the_per_tick_breaking_change(self):
         source = load_source()
@@ -306,6 +351,23 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertIn("open every automation created from it", source)
         self.assertIn("review these two inputs, and save it again", source)
         self.assertIn("`5` to `60 K/tick`", source)
+
+    def test_shows_a_compact_breaking_change_summary_first(self):
+        source = load_source()
+        summary_heading = "## BREAKING CHANGES - READ BEFORE UPDATING"
+        summary_start = source.index(summary_heading)
+        supporting_start = source.index("## Supporting")
+        summary = source[summary_start:supporting_start]
+
+        self.assertLess(summary_start, supporting_start)
+        self.assertIn("Home Assistant Core `2025.4` or newer", summary)
+        self.assertIn("one UI-selected `light` or light-group entity", summary)
+        self.assertIn("direct per-tick units", summary)
+        self.assertIn("`translate_friendly_name` has been removed", summary)
+        self.assertIn(
+            "Hold Repeat Maximum Duration is now limited to `11 seconds`",
+            summary,
+        )
 
     def test_uses_cumulative_signed_per_tick_targets(self):
         source = load_source()
@@ -406,18 +468,18 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         for angle in (12, 24, 60):
             positive.listener_capture(angle)
             positive.worker_apply_latest()
-        self.assertEqual(positive.brightness_commands, [44, 48, 60])
+        self.assertEqual(positive.brightness_commands, [42, 44, 50])
 
         negative = RotationGestureModel(base_color_temp_k=4000)
         negative.listener_capture(-24, "pressed")
         negative.worker_apply_latest()
-        self.assertEqual(negative.color_temp_commands, [3880])
+        self.assertEqual(negative.color_temp_commands, [3800])
 
         coalesced = RotationGestureModel(base_brightness_pct=40)
         for angle in (12, 24, 60):
             coalesced.listener_capture(angle)
         coalesced.worker_apply_latest()
-        self.assertEqual(coalesced.brightness_commands, [60])
+        self.assertEqual(coalesced.brightness_commands, [50])
 
     def test_delayed_entity_state_does_not_drop_cumulative_ticks(self):
         gesture = RotationGestureModel(base_brightness_pct=40)
@@ -427,9 +489,21 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
             gesture.worker_apply_latest()
 
         self.assertEqual(gesture.entity_brightness_pct, 40)
-        self.assertEqual(gesture.brightness_commands, [44, 48, 52])
+        self.assertEqual(gesture.brightness_commands, [42, 44, 46])
         gesture.publish_all_delayed_brightness_states()
-        self.assertEqual(gesture.entity_brightness_pct, 52)
+        self.assertEqual(gesture.entity_brightness_pct, 46)
+
+    def test_hundred_percent_per_tick_clamps_and_skips_duplicate_commands(self):
+        gesture = RotationGestureModel(
+            base_brightness_pct=40,
+            brightness_pct_per_tick=100,
+        )
+
+        for angle in (12, 24, 60, 120):
+            gesture.listener_capture(angle)
+            gesture.worker_apply_latest()
+
+        self.assertEqual(gesture.brightness_commands, [100])
 
     def test_stop_packet_final_angle_is_applied_after_worker_delay(self):
         gesture = RotationGestureModel(base_brightness_pct=40)
@@ -440,7 +514,7 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         gesture.worker_apply_latest()
 
         self.assertTrue(gesture.listener_done)
-        self.assertEqual(gesture.brightness_commands, [56])
+        self.assertEqual(gesture.brightness_commands, [48])
 
         gesture.listener_stop()
         self.assertEqual(gesture.latest_angle, 48)
@@ -460,7 +534,7 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
 
         self.assertEqual(gesture.startup_commands, [(12, "released")])
         self.assertEqual(gesture.angle_offset, 12)
-        self.assertEqual(gesture.brightness_commands, [48])
+        self.assertEqual(gesture.brightness_commands, [44])
         self.assertEqual(gesture.applied_signature, (36, "released"))
 
     def test_restore_refreshes_reported_base_before_applying_remaining_ticks(self):
@@ -478,7 +552,7 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
 
         self.assertEqual(gesture.startup_commands, [(12, "released")])
         self.assertEqual(gesture.base_brightness_pct, 40)
-        self.assertEqual(gesture.brightness_commands, [48])
+        self.assertEqual(gesture.brightness_commands, [44])
 
         source = load_source()
         self.assertIn("alias: Wait for restored brightness state", source)
@@ -501,7 +575,7 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
 
         self.assertEqual(gesture.startup_commands, [(12, "pressed")])
         self.assertEqual(gesture.base_color_temp_k, 3500)
-        self.assertEqual(gesture.color_temp_commands, [3620])
+        self.assertEqual(gesture.color_temp_commands, [3700])
 
         source = load_source()
         wait_start = source.index(
@@ -533,7 +607,7 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
 
         self.assertEqual(gesture.startup_commands, [(12, "pressed")])
         self.assertEqual(gesture.angle_offset, 12)
-        self.assertEqual(gesture.color_temp_commands, [4120])
+        self.assertEqual(gesture.color_temp_commands, [4200])
         self.assertEqual(gesture.applied_signature, (36, "pressed"))
 
     def test_same_angle_button_change_is_a_fresh_worker_signature(self):
@@ -546,8 +620,8 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         gesture.listener_capture(12, "pressed")
         gesture.worker_apply_latest()
 
-        self.assertEqual(gesture.brightness_commands, [44])
-        self.assertEqual(gesture.color_temp_commands, [4060])
+        self.assertEqual(gesture.brightness_commands, [42])
+        self.assertEqual(gesture.color_temp_commands, [4100])
         self.assertEqual(gesture.applied_signature, (12, "pressed"))
 
     def test_blueprint_tracks_stop_final_startup_and_full_signature(self):
@@ -611,6 +685,39 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
             with self.subTest(input_name=input_name):
                 self.assertRegex(source, rf"(?m)^ {{4}}(?: {{4}})?{input_name}:$")
 
+    def test_removes_obsolete_translate_friendly_name_input(self):
+        source = load_source()
+
+        self.assertNotIn("translate_friendly_name:", source)
+        self.assertNotIn("Translate Friendly Name (Deprecated)", source)
+        self.assertIn(
+            "The obsolete `translate_friendly_name` compatibility input has been removed.",
+            source,
+        )
+
+    def test_target_light_is_one_ui_selected_light_or_light_group(self):
+        source = load_source()
+        match = re.search(
+            r"(?ms)^    target_light:\n.*?(?=^    # Restore Brightness option)",
+            source,
+        )
+        self.assertIsNotNone(match)
+        target_light = match.group(0)
+
+        self.assertIn("selector:\n        entity:", target_light)
+        self.assertIn("- domain: light", target_light)
+        self.assertIn("multiple: false", target_light)
+        self.assertNotIn("template:", target_light)
+        self.assertIn(
+            "https://www.home-assistant.io/integrations/group/#light-groups",
+            source,
+        )
+        self.assertIn(
+            "https://github.com/Cheerpipe/relative-light-group",
+            source,
+        )
+        self.assertIn("Direct entity lists and templates are not supported", source)
+
     def test_exposes_both_hold_repeat_modes_and_release_action(self):
         source = load_source()
 
@@ -624,11 +731,70 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
             self.assertRegex(source, rf"(?m)^ {{8}}{input_name}:$")
         self.assertIn("value: repeat_hold", source)
         self.assertIn("value: separate_repeat", source)
-        self.assertRegex(
+        max_duration = extract_input_block(
             source,
-            r"(?s)hold_repeat_max_duration:.*?default: 60",
+            "hold_repeat_max_duration",
+            "action_release",
         )
+        self.assertRegex(max_duration, r"(?m)^          default: 11$")
+        self.assertRegex(max_duration, r"(?m)^              max: 11$")
+        self.assertIn("The default and maximum are 11 seconds", max_duration)
+        self.assertIn(
+            "**RELEASE THE PHYSICAL BUTTON BEFORE 10 SECONDS**",
+            max_duration,
+        )
+        self.assertIn("HOLD_REPEAT_MAX_DURATION | float(11)", source)
         self.assertIn("min(HOLD_REPEAT_INTERVAL", source)
+
+    def test_separates_a_collapsed_hold_repeat_section_from_press_actions(self):
+        source = load_source()
+        press_start = source.index("    ##### Press Action")
+        repeat_start = source.index("    ##### Hold Repeat & Release")
+        knob_start = source.index("    ##### Knob Action")
+        press_section = source[press_start:repeat_start]
+        repeat_section = source[repeat_start:knob_start]
+
+        self.assertIn("collapsed: false", press_section)
+        for input_name in ("action_single", "action_double", "action_hold"):
+            self.assertRegex(press_section, rf"(?m)^        {input_name}:$")
+        for input_name in (
+            "hold_repeat_mode",
+            "action_hold_repeat",
+            "hold_repeat_interval",
+            "hold_repeat_max_duration",
+            "action_release",
+        ):
+            self.assertNotRegex(press_section, rf"(?m)^        {input_name}:$")
+            self.assertRegex(repeat_section, rf"(?m)^        {input_name}:$")
+
+        self.assertIn("name: Hold Repeat & Release", repeat_section)
+        self.assertIn("collapsed: true", repeat_section)
+
+    def test_press_action_descriptions_are_scannable_without_cover_examples(self):
+        source = load_source()
+        press_start = source.index("    ##### Press Action")
+        press_end = source.index("    ##### Knob Action")
+        press_section = source[press_start:press_end]
+
+        self.assertNotIn("cover.", source)
+        self.assertNotIn("For a cover", source)
+        self.assertGreaterEqual(press_section.count("<br>"), 10)
+        self.assertIn("<br><br>**Do not repeat:**", press_section)
+        self.assertIn("<br>**Repeat Hold Action:**", press_section)
+        self.assertIn(
+            "<br>**Hold once, then repeat a separate action:**",
+            press_section,
+        )
+        compact_press = compact_whitespace(press_section)
+        self.assertGreaterEqual(compact_press.count("while the button is held"), 3)
+        self.assertIn(
+            "until `release`, another knob action, or the maximum duration",
+            compact_press,
+        )
+        self.assertIn(
+            "**LEAVE THIS EMPTY** unless you specifically need an action",
+            compact_press,
+        )
 
     def test_routes_release_and_both_hold_repeat_modes(self):
         source = load_source()

@@ -1,5 +1,12 @@
 # Z2M Aqara Knob Atomic Events Implementation Plan
 
+> **Status: Superseded.** This historical plan is retained for context only. Do not
+> implement its queued packet-per-run or `action_rotation_angle_speed` instructions.
+> The final architecture and validation steps are in
+> [2026-07-13-z2m-knob-per-tick-controls.md](2026-07-13-z2m-knob-per-tick-controls.md):
+> Home Assistant Core 2025.4+, global `parallel`, one top-level `start_rotating` run,
+> cumulative angle capture, and one sequential light worker per gesture.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the Aqara H1 Blueprint consume atomic Zigbee2MQTT JSON events, serialize each rotation, and support configurable Hold repetition plus Release actions.

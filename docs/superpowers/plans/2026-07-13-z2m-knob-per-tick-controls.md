@@ -4,7 +4,7 @@
 
 **Goal:** Make one 12-degree Aqara knob tick change brightness by the exact UI-selected percentage and pressed-rotation color temperature by the exact UI-selected Kelvin value, while preserving atomic MQTT packet handling and the existing exact device topic.
 
-**Architecture:** Keep the current `{{ base_topic }}/{{ knob }}` MQTT trigger, `mode: queued`, and packet-local `trigger.payload_json.action_rotation_angle_speed`. Convert that signed angle increment to `rotation_ticks` once, derive brightness and color-temperature deltas directly from it, and feed those deltas into the existing restore, clamp, transition, and light-service branches. Retain the existing input IDs for migration compatibility, but replace their legacy multiplier semantics and clearly document the breaking change.
+**Architecture:** Keep the exact `{{ base_topic }}/{{ knob }}` MQTT topic and start one global-`parallel` run for `start_rotating`. Its listener consumes cumulative `action_rotation_angle` updates through `stop_rotating`, while one sequential worker derives absolute brightness and color-temperature targets from the gesture base. Retain the existing input IDs for migration compatibility, but replace their legacy multiplier semantics and clearly document the breaking change.
 
 **Tech Stack:** Home Assistant automation Blueprint YAML, Home Assistant Jinja templates, Python standard-library `unittest`, PyYAML and Jinja2 for static validation.
 
@@ -16,24 +16,27 @@ This addendum supersedes the packet-per-run rotation architecture and any Core
 - Raise the minimum to Home Assistant Core 2025.4. That release made `variables`
   actions update existing variables across nested and parallel action scopes; the
   corrected listener/worker design relies on this shared run scope.
-- Keep the global automation mode `queued`, `max: 1000`, and
-  `max_exceeded: warning`. Do not use global restart or parallel mode. Internal parallel
-  coordination blocks only pair an MQTT listener with a sequential worker, and
-  all light service commands remain sequential in the worker.
+- Use global automation mode `parallel`, `max: 1000`, and
+  `max_exceeded: warning`. Do not use global restart or queued mode. This starts a
+  rotation listener immediately beside a slow press action. Internal parallel
+  coordination only pairs an MQTT listener with a sequential worker, and all light
+  service commands for one gesture remain sequential in the worker.
 - Filter top-level runs to `single`, `double`, `hold`, `release`, and
   `start_rotating`. The active rotation listener consumes intermediate `rotation`
   and terminal `stop_rotating` packets, so those packets no longer create traces.
 - For repeating Hold, start the stop listener before the initial user action. A
   stop received during a slow action allows that action to finish but suppresses
-  every later repeat; Release or another semantic action stays queued normally.
-- For rotation, snapshot base brightness percentage and color temperature once at
-  gesture start. Capture the latest cumulative `action_rotation_angle`, calculate
-  signed ticks from that cumulative angle, and command absolute targets from the
-  gesture base. A single worker applies the latest unapplied target, including the
-  final captured angle, without rereading delayed light state.
+  every later repeat; Release or another semantic action starts independently.
+- For rotation, snapshot base brightness percentage and color temperature at gesture
+  start for an already-on light. After an off-light restore/startup, wait up to two
+  seconds for a reported state and refresh the applicable base once while the listener
+  stays active. Capture the latest cumulative `action_rotation_angle`, calculate signed
+  ticks, and command absolute targets from that base. A single worker applies the
+  latest unapplied target, including the final captured angle.
 - Capture angle and button state supplied by both `rotation` and `stop_rotating`
-  before setting listener completion; preserve the previous component when a stop
-  field is absent. Track the complete applied `(angle, button_state)` signature.
+  before setting listener completion; preserve the previous component when a field
+  is absent, but coerce an explicit null/nonnumeric angle to zero and an explicit null
+  button state to empty. Track the complete applied `(angle, button_state)` signature.
 - Store the actual first positive off-light startup signature separately. When
   brightness restore or pressed color startup needs a turn-on-only command, consume
   only that first angle and then process any newer coalesced cumulative delta.
@@ -43,16 +46,18 @@ This addendum supersedes the packet-per-run rotation architecture and any Core
   Retain YAML/Jinja parsing and representative arithmetic rendering.
 
 Final-review validation must cover the Core 2025.4 explanation, exact MQTT topic,
-raw payload filtering, stable selectors and input IDs, clamps, global queued mode,
-absence of global restart/parallel mode, sequential light commands, migration/forum
+raw payload filtering, stable selectors and input IDs, clamps, global parallel mode,
+absence of global restart/queued mode, sequential light commands, migration/forum
 text, output hashes, full tests, and `git diff --check`.
 
 ## Global Constraints
 
 - Keep `base_topic`, the manually entered Zigbee2MQTT `knob` friendly name, and the exact topic `{{ base_topic }}/{{ knob }}`. Do not add a Home Assistant device selector or an MQTT wildcard.
 - Keep the root MQTT trigger and the hold-loop MQTT wait filter on raw JSON messages whose payload contains `action`.
-- Keep `mode: queued`, `max: 1000`, `max_exceeded: warning`, and arrival-order processing.
-- Use only the current packet's `action_rotation_angle_speed`; do not introduce previous-message state, helper entities, or generated Zigbee2MQTT sensor entities.
+- Keep `mode: parallel`, `max: 1000`, and `max_exceeded: warning` so gesture listeners
+  start immediately.
+- Use the active gesture's cumulative `action_rotation_angle`; do not introduce helper
+  entities or generated Zigbee2MQTT sensor entities.
 - Define one tick as exactly 12 degrees. Preserve the sign for left/right rotation.
 - Keep brightness limits, color-temperature limits, restore-brightness behavior, default color temperature, and transition behavior.
 - Keep the deprecated `translate_friendly_name` compatibility input as an unused no-op.
@@ -410,7 +415,7 @@ def validate_templates(value):
 
 
 validate_templates(document)
-assert document["mode"] == "queued"
+assert document["mode"] == "parallel"
 assert document["max"] == 1000
 assert document["trigger"][0]["topic"] == "{{ base_topic }}/{{ knob }}"
 print(f"Validated YAML and {template_count} Jinja templates")
@@ -498,7 +503,8 @@ git diff 2f2bcd6..HEAD -- blueprints/automation/z2m_aqara_knob_h1_light_control.
 Confirm all of the following before reporting completion:
 
 - The only root MQTT topic remains `{{ base_topic }}/{{ knob }}`; no wildcard or device-picker path was introduced.
-- Rotation values come from the same triggering JSON packet and stay queued in arrival order.
+- Rotation values come from the active gesture's MQTT JSON packets and are consumed
+  by its listener in arrival order; intermediate packets do not create top-level runs.
 - A 60-degree packet is five ticks, not one event or one fixed UI increment.
 - Brightness uses exact `%/tick`; pressed rotation uses exact `K/tick`.
 - The old `/ 3.6 / 3`, `2.54`, and 0-to-255 delta round trip are gone.

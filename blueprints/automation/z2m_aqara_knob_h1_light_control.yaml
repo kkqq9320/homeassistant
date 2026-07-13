@@ -18,9 +18,13 @@ blueprint:
 
       - The blueprint consumes each JSON event directly from the Zigbee2MQTT device topic.
         It does not depend on generated Home Assistant sensor entity IDs.
-      - The global automation mode remains `queued`; internal parallel blocks only keep
-        a listener alive beside one sequential worker. Light service commands never run
-        in multiple branches.
+      - The global automation mode is `parallel`, so `start_rotating` can start its
+        listener immediately even while a configured press action is still running.
+        Only `single`, `double`, `hold`, `release`, and `start_rotating` create
+        top-level runs. Intermediate rotation packets stay inside one gesture run.
+      - Internal parallel blocks only keep a listener alive beside one sequential
+        worker. Light service commands for a rotation gesture never run in multiple
+        branches.
       - Rotation is processed as one gesture from `start_rotating` through
         `stop_rotating`. The listener keeps the newest cumulative
         `action_rotation_angle`, so intermediate rotation packets may be coalesced and
@@ -325,7 +329,7 @@ blueprint:
               unit_of_measurement: "K"
 
 ####################
-mode: queued
+mode: parallel
 max: 1000
 max_exceeded: warning
 trace:
@@ -525,18 +529,18 @@ action:
                                   {{ wait.trigger.payload_json.action |
                                     default('') }}
                                 ROTATION_PACKET_ANGLE: >-
-                                  {% set packet_angle =
-                                    wait.trigger.payload_json.action_rotation_angle |
-                                    default(none) %}
-                                  {{ ROTATION_LATEST_ANGLE
-                                    if packet_angle is none else
-                                    wait.trigger.payload_json.action_rotation_angle | float(0) }}
+                                  {% if wait.trigger.payload_json.action_rotation_angle is defined %}
+                                    {{ wait.trigger.payload_json.action_rotation_angle | float(0) }}
+                                  {% else %}
+                                    {{ ROTATION_LATEST_ANGLE }}
+                                  {% endif %}
                                 ROTATION_PACKET_BUTTON_STATE: >-
-                                  {% set packet_button =
-                                    wait.trigger.payload_json.action_rotation_button_state |
-                                    default(none) %}
-                                  {{ ROTATION_LATEST_BUTTON_STATE
-                                    if packet_button is none else packet_button }}
+                                  {% if wait.trigger.payload_json.action_rotation_button_state is defined %}
+                                    {{ wait.trigger.payload_json.action_rotation_button_state |
+                                      default('', true) }}
+                                  {% else %}
+                                    {{ ROTATION_LATEST_BUTTON_STATE }}
+                                  {% endif %}
 
                             - if:
                                 - condition: template
@@ -648,6 +652,33 @@ action:
                                           data:
                                             transition: "{{ TRANSITION_TIME }}"
 
+                                        - alias: Wait for restored brightness state
+                                          wait_template: >-
+                                            {{ is_state(TARGET_LIGHT, 'on') and
+                                              state_attr(TARGET_LIGHT, 'brightness')
+                                                is number }}
+                                          timeout:
+                                            seconds: 2
+                                          continue_on_timeout: true
+
+                                        - alias: Refresh restored brightness base
+                                          variables:
+                                            ROTATION_BASE_BRIGHTNESS_PCT: >-
+                                              {% set restored_brightness =
+                                                state_attr(TARGET_LIGHT, 'brightness') %}
+                                              {% if restored_brightness is number %}
+                                                {{ (restored_brightness | float(0) /
+                                                  255 * 100) | round(0) }}
+                                              {% else %}
+                                                {{ ROTATION_BASE_BRIGHTNESS_PCT |
+                                                  round(0) }}
+                                              {% endif %}
+
+                                        - variables:
+                                            ROTATION_LAST_BRIGHTNESS_TARGET: >-
+                                              {{ ROTATION_BASE_BRIGHTNESS_PCT |
+                                                round(0) }}
+
                                         - variables:
                                             ROTATION_ANGLE_OFFSET: >-
                                               {{ ROTATION_WORK_ANGLE | float(0) }}
@@ -699,6 +730,32 @@ action:
                                             entity_id: "{{ TARGET_LIGHT }}"
                                           data:
                                             transition: "{{ TRANSITION_TIME }}"
+
+                                        - alias: Wait for restored color temperature state
+                                          wait_template: >-
+                                            {{ is_state(TARGET_LIGHT, 'on') and
+                                              state_attr(TARGET_LIGHT, 'brightness')
+                                                is number }}
+                                          timeout:
+                                            seconds: 2
+                                          continue_on_timeout: true
+
+                                        - alias: Refresh restored color temperature base
+                                          variables:
+                                            ROTATION_BASE_COLOR_TEMP_K: >-
+                                              {% set restored_temp =
+                                                state_attr(TARGET_LIGHT, 'color_temp_kelvin') %}
+                                              {% if restored_temp is number %}
+                                                {{ min(ROTATION_COLOR_TEMP_MAX | int,
+                                                  max(ROTATION_COLOR_TEMP_MIN | int,
+                                                    restored_temp | int)) }}
+                                              {% else %}
+                                                {{ ROTATION_BASE_COLOR_TEMP_K | int }}
+                                              {% endif %}
+
+                                        - variables:
+                                            ROTATION_LAST_COLOR_TEMP_TARGET: >-
+                                              {{ ROTATION_BASE_COLOR_TEMP_K | int }}
 
                                         - variables:
                                             ROTATION_ANGLE_OFFSET: >-

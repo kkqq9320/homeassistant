@@ -9,7 +9,7 @@ degrees) must produce a 5% change. Color temperature follows the same rule in
 Kelvin per tick.
 
 This change affects only the rotation calculations and the related Blueprint
-input descriptions. Atomic MQTT payload handling, queued execution, Hold and
+input descriptions. Atomic MQTT payload handling, immediate gesture execution, Hold and
 Release actions, brightness restoration, min/max limits, transition behavior,
 and pressed/released rotation mappings remain unchanged.
 
@@ -21,9 +21,10 @@ is superseded by gesture-level cumulative processing:
 - Require Home Assistant Core 2025.4. Its `variables` action can update an
   existing variable across nested and parallel action scopes, which the shared
   listener/worker run state requires.
-- Keep the global mode `queued`. Internal parallel blocks are limited to an MQTT
-  listener beside one sequential worker; light service commands remain sequential
-  and never run in competing branches.
+- Use global `parallel` mode so a `start_rotating` listener begins immediately even
+  while a configured press action is running. Internal parallel blocks remain
+  limited to an MQTT listener beside one sequential worker; light service commands
+  for one rotation gesture remain sequential and never run in competing branches.
 - Start one rotation run on `start_rotating`. Its listener consumes `rotation` and
   `stop_rotating`, captures the newest cumulative angle and button state, and ends
   on a different action or bounded inactivity timeout. Intermediate packets may be
@@ -110,9 +111,11 @@ color_temp_target = base_color_temp_k + rotation_ticks * color_temp_k_per_tick
 Brightness and color temperature apply those absolute targets with the existing
 rounding and configured min/max clamps. The base values are captured once at
 gesture start; later commands do not reread brightness or color temperature. If a
-restore-only positive startup packet is consumed, its cumulative angle becomes the
-gesture offset so later movement starts from the restored base without double-counting
-the startup packet. The listener stores that first positive packet separately, so
+restore-only positive startup packet is consumed, the worker waits up to two seconds
+for the light's reported state and refreshes the applicable base once. Its cumulative
+angle becomes the gesture offset so later movement starts from that restored base
+without double-counting the startup packet. The listener remains active during this
+bounded wait and stores the first positive packet separately, so
 12/24/36-degree packets coalesced before the worker produce a 12-degree startup
 offset followed by the remaining 24 degrees of movement.
 
@@ -159,8 +162,10 @@ Use the following facts when updating the Home Assistant forum post:
 > review the two rotation values, and save. In particular, change a previous
 > color-temperature stepsize of 5 to 60 K/tick to preserve the old response,
 > and replace any previous brightness value above 10 with a value from 1-10.
-> The global automation mode remains queued. Internal parallelism only keeps a
-> listener active beside a sequential worker, so light commands remain sequential.
+> The global automation mode is parallel so a rotation listener starts immediately
+> even while a configured press action is running. Only `start_rotating` creates a
+> top-level rotation run; intermediate packets stay inside its listener, and one
+> sequential worker issues the light commands for that gesture.
 > Rotation now uses one gesture's cumulative angle and creates fewer intermediate
 > automation traces.
 > The final stop packet is honored, same-angle button-state changes are processed,
@@ -172,14 +177,16 @@ migration facts above.
 
 ## Error Handling and Limits
 
-- Missing, null, or nonnumeric cumulative `action_rotation_angle` resolves to zero.
+- A missing cumulative angle or button field preserves the last captured component.
+  An explicitly null or nonnumeric angle resolves to zero; an explicitly null button
+  state resolves to an empty state.
 - `stop_rotating` ends the gesture listener and causes no top-level light run.
 - A stop packet carrying a newer cumulative angle updates the final target before
   the listener ends; absent angle or button fields preserve the last values.
 - Brightness and color-temperature results remain clamped to their configured
   ranges.
-- Global queued automation mode remains unchanged. The one gesture worker is the
-  only branch allowed to update a light.
+- Global parallel mode starts gesture listeners promptly. The one worker inside each
+  gesture run is the only branch allowed to update a light for that gesture.
 
 ## Verification
 
@@ -192,7 +199,8 @@ Extend the standard-library tests to prove:
 - With color temperature set to 60, the same angles produce 60 K, 300 K,
   -120 K, and 420 K respectively.
 - Rotation reads cumulative `action_rotation_angle` in one gesture run, and the
-  Blueprint remains in global queued mode.
+  Blueprint uses global parallel mode without making intermediate packets top-level
+  triggers.
 - Coalescing intermediate packets preserves the final absolute target.
 - A delayed entity-state simulation ends at the full cumulative target rather than
   losing ticks.

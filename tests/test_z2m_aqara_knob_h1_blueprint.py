@@ -31,6 +31,13 @@ PER_TICK_PLAN_PATH = (
     / "plans"
     / "2026-07-13-z2m-knob-per-tick-controls.md"
 )
+HISTORICAL_ATOMIC_PLAN_PATH = (
+    REPOSITORY_ROOT
+    / "docs"
+    / "superpowers"
+    / "plans"
+    / "2026-07-13-z2m-knob-atomic-events.md"
+)
 TOP_LEVEL_ACTIONS = (
     "single",
     "double",
@@ -38,6 +45,7 @@ TOP_LEVEL_ACTIONS = (
     "release",
     "start_rotating",
 )
+MISSING = object()
 
 
 def load_source():
@@ -75,12 +83,16 @@ class RotationGestureModel:
         color_temp_k_per_tick=60,
         light_is_off=False,
         restore_brightness=False,
+        restored_brightness_pct=None,
+        restored_color_temp_k=None,
     ):
         self.base_brightness_pct = base_brightness_pct
         self.base_color_temp_k = base_color_temp_k
         self.brightness_pct_per_tick = brightness_pct_per_tick
         self.color_temp_k_per_tick = color_temp_k_per_tick
         self.restore_brightness = restore_brightness
+        self.restored_brightness_pct = restored_brightness_pct
+        self.restored_color_temp_k = restored_color_temp_k
         self.entity_brightness_pct = base_brightness_pct
         self.latest_angle = 0
         self.latest_button_state = "released"
@@ -95,18 +107,20 @@ class RotationGestureModel:
         self.brightness_commands = []
         self.color_temp_commands = []
 
-    def listener_capture(self, angle, button_state="released"):
-        self.latest_angle = angle
-        self.latest_button_state = button_state
-        if self.startup_angle is None and angle > 0:
-            self.startup_angle = angle
-            self.startup_button_state = button_state
+    def listener_capture(self, angle=MISSING, button_state=MISSING):
+        if angle is not MISSING:
+            try:
+                self.latest_angle = float(angle or 0)
+            except (TypeError, ValueError):
+                self.latest_angle = 0
+        if button_state is not MISSING:
+            self.latest_button_state = button_state or ""
+        if self.startup_angle is None and self.latest_angle > 0:
+            self.startup_angle = self.latest_angle
+            self.startup_button_state = self.latest_button_state
 
-    def listener_stop(self, angle=None, button_state=None):
-        if angle is not None:
-            self.latest_angle = angle
-        if button_state is not None:
-            self.latest_button_state = button_state
+    def listener_stop(self, angle=MISSING, button_state=MISSING):
+        self.listener_capture(angle, button_state)
         if self.startup_angle is None and self.latest_angle > 0:
             self.startup_angle = self.latest_angle
             self.startup_button_state = self.latest_button_state
@@ -148,6 +162,16 @@ class RotationGestureModel:
             )
         ):
             self.startup_commands.append(work_signature)
+            if (
+                work_button_state == "released"
+                and self.restored_brightness_pct is not None
+            ):
+                self.base_brightness_pct = self.restored_brightness_pct
+            if (
+                work_button_state == "pressed"
+                and self.restored_color_temp_k is not None
+            ):
+                self.base_color_temp_k = self.restored_color_temp_k
             self.angle_offset = work_angle
             self.off_startup_pending = False
         elif work_button_state == "released":
@@ -182,7 +206,6 @@ class HoldRepeatModel:
         self.stopped = False
         self.worker_ticks_remaining = 0
         self.hold_actions_started = 0
-        self.top_level_queue = []
         self.top_level_actions_executed = []
 
     def start(self, slow_action_ticks):
@@ -194,7 +217,7 @@ class HoldRepeatModel:
         if self.listener_active:
             self.stopped = True
         if action in TOP_LEVEL_ACTIONS:
-            self.top_level_queue.append(action)
+            self.top_level_actions_executed.append(action)
 
     def advance_worker(self):
         if self.worker_ticks_remaining:
@@ -206,15 +229,13 @@ class HoldRepeatModel:
         if self.worker_ticks_remaining:
             raise AssertionError("The current Hold action is still running")
         self.listener_active = False
-        self.top_level_actions_executed.extend(self.top_level_queue)
-        self.top_level_queue.clear()
 
 
 class AqaraKnobBlueprintTest(unittest.TestCase):
     def test_uses_one_root_topic_trigger_for_every_action_message(self):
         source = load_source()
 
-        self.assertIn("mode: queued", source)
+        self.assertIn("mode: parallel", source)
         self.assertEqual(source.count("platform: mqtt"), 3)
         self.assertNotIn("trigger: mqtt", source)
         self.assertEqual(
@@ -242,14 +263,14 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertNotIn("'rotation'", compact)
         self.assertNotIn("'stop_rotating'", compact)
 
-    def test_global_mode_stays_queued_while_internal_parallelism_is_limited(self):
+    def test_global_parallel_starts_gestures_while_light_commands_stay_sequential(self):
         source = load_source()
 
         self.assertRegex(
             source,
-            r"(?m)^mode: queued\nmax: 1000\nmax_exceeded: warning$",
+            r"(?m)^mode: parallel\nmax: 1000\nmax_exceeded: warning$",
         )
-        self.assertNotRegex(source, r"(?m)^mode: (?:restart|parallel)$")
+        self.assertNotRegex(source, r"(?m)^mode: (?:restart|queued)$")
         self.assertEqual(source.count("          - parallel:"), 2)
         self.assertIn("alias: Hold stop listener", source)
         self.assertIn("alias: Hold repeat worker", source)
@@ -320,11 +341,11 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertNotIn("action_rotation_angle_speed", source)
         self.assertEqual(
             source.count("state_attr(TARGET_LIGHT, 'brightness')"),
-            1,
+            4,
         )
         self.assertEqual(
             source.count("state_attr(TARGET_LIGHT, 'color_temp_kelvin')"),
-            1,
+            2,
         )
         self.assertNotIn("/ 3.6 / 3", source)
         self.assertNotIn("2.54", source)
@@ -391,6 +412,30 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertEqual(gesture.brightness_commands, [48])
         self.assertEqual(gesture.applied_signature, (36, "released"))
 
+    def test_restore_refreshes_reported_base_before_applying_remaining_ticks(self):
+        gesture = RotationGestureModel(
+            base_brightness_pct=0,
+            light_is_off=True,
+            restore_brightness=True,
+            restored_brightness_pct=40,
+        )
+        for angle in (12, 24, 36):
+            gesture.listener_capture(angle, "released")
+
+        gesture.worker_apply_latest()
+        gesture.worker_apply_latest()
+
+        self.assertEqual(gesture.startup_commands, [(12, "released")])
+        self.assertEqual(gesture.base_brightness_pct, 40)
+        self.assertEqual(gesture.brightness_commands, [48])
+
+        source = load_source()
+        self.assertIn("alias: Wait for restored brightness state", source)
+        self.assertIn("alias: Refresh restored brightness base", source)
+        self.assertIn("alias: Wait for restored color temperature state", source)
+        self.assertIn("alias: Refresh restored color temperature base", source)
+        self.assertGreaterEqual(source.count("continue_on_timeout: true"), 4)
+
     def test_coalesced_pressed_startup_consumes_only_startup_angle(self):
         gesture = RotationGestureModel(
             base_color_temp_k=4000,
@@ -441,6 +486,30 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
             "ROTATION_APPLIED_BUTTON_STATE == ROTATION_LATEST_BUTTON_STATE",
             compact,
         )
+
+    def test_missing_packet_fields_preserve_previous_values_but_null_resets_them(self):
+        gesture = RotationGestureModel()
+        gesture.listener_capture(48, "released")
+        gesture.listener_stop()
+        self.assertEqual(gesture.latest_angle, 48)
+        self.assertEqual(gesture.latest_button_state, "released")
+
+        gesture = RotationGestureModel()
+        gesture.listener_capture(48, "released")
+        gesture.listener_stop(None, None)
+        self.assertEqual(gesture.latest_angle, 0)
+        self.assertEqual(gesture.latest_button_state, "")
+
+        source = load_source()
+        self.assertIn(
+            "wait.trigger.payload_json.action_rotation_angle is defined",
+            source,
+        )
+        self.assertIn(
+            "wait.trigger.payload_json.action_rotation_button_state is defined",
+            source,
+        )
+        self.assertNotIn("default(none)", source)
 
     def test_mqtt_value_templates_do_not_reference_trigger_variables(self):
         source = load_source()
@@ -522,6 +591,7 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
 
         self.assertTrue(hold.stopped)
         self.assertEqual(hold.hold_actions_started, 1)
+        self.assertEqual(hold.top_level_actions_executed, ["release"])
         hold.advance_worker()
         hold.advance_worker()
         self.assertEqual(hold.hold_actions_started, 1)
@@ -529,10 +599,10 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         hold.finish_hold_run()
         self.assertEqual(hold.top_level_actions_executed, ["release"])
 
-    def test_queue_capacity_is_large_and_overflow_is_visible(self):
+    def test_parallel_capacity_is_large_and_overflow_is_visible(self):
         source = load_source()
 
-        self.assertRegex(source, r"(?m)^mode: queued\nmax: 1000$")
+        self.assertRegex(source, r"(?m)^mode: parallel\nmax: 1000$")
         self.assertIn("max_exceeded: warning", source)
 
     def test_requires_core_2025_4_and_documents_the_scope_reason(self):
@@ -567,13 +637,17 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
 
         for document in documents:
             with self.subTest(document=document[:40]):
-                self.assertRegex(document, r"(?is)global.*mode.*queued")
+                self.assertRegex(document, r"(?is)global.*mode.*parallel")
                 self.assertRegex(document, r"(?is)internal parallel")
                 self.assertRegex(document, r"(?is)light.*(?:command|service).*sequential")
                 self.assertRegex(document, r"(?is)cumulative.*angle")
 
         forum_draft = PER_TICK_DESIGN_PATH.read_text(encoding="utf-8")
         self.assertRegex(forum_draft, r"(?is)forum.*2025\.4")
+
+        historical_plan = HISTORICAL_ATOMIC_PLAN_PATH.read_text(encoding="utf-8")
+        self.assertRegex(historical_plan, r"(?is)status.*superseded")
+        self.assertIn("2026-07-13-z2m-knob-per-tick-controls.md", historical_plan)
 
 
 if __name__ == "__main__":

@@ -73,15 +73,24 @@ class RotationGestureModel:
         base_color_temp_k=4000,
         brightness_pct_per_tick=4,
         color_temp_k_per_tick=60,
+        light_is_off=False,
+        restore_brightness=False,
     ):
         self.base_brightness_pct = base_brightness_pct
         self.base_color_temp_k = base_color_temp_k
         self.brightness_pct_per_tick = brightness_pct_per_tick
         self.color_temp_k_per_tick = color_temp_k_per_tick
+        self.restore_brightness = restore_brightness
         self.entity_brightness_pct = base_brightness_pct
         self.latest_angle = 0
         self.latest_button_state = "released"
-        self.applied_angle = None
+        self.listener_done = False
+        self.startup_angle = None
+        self.startup_button_state = None
+        self.applied_signature = None
+        self.angle_offset = 0
+        self.off_startup_pending = light_is_off
+        self.startup_commands = []
         self.pending_brightness_publications = []
         self.brightness_commands = []
         self.color_temp_commands = []
@@ -89,13 +98,59 @@ class RotationGestureModel:
     def listener_capture(self, angle, button_state="released"):
         self.latest_angle = angle
         self.latest_button_state = button_state
+        if self.startup_angle is None and angle > 0:
+            self.startup_angle = angle
+            self.startup_button_state = button_state
+
+    def listener_stop(self, angle=None, button_state=None):
+        if angle is not None:
+            self.latest_angle = angle
+        if button_state is not None:
+            self.latest_button_state = button_state
+        if self.startup_angle is None and self.latest_angle > 0:
+            self.startup_angle = self.latest_angle
+            self.startup_button_state = self.latest_button_state
+        self.listener_done = True
 
     def worker_apply_latest(self):
-        if self.applied_angle == self.latest_angle:
+        latest_signature = (self.latest_angle, self.latest_button_state)
+        startup_signature = (
+            self.startup_angle,
+            self.startup_button_state,
+        )
+        startup_requires_turn_on_only = (
+            self.off_startup_pending
+            and self.startup_angle is not None
+            and (
+                self.startup_button_state == "pressed"
+                or self.restore_brightness
+            )
+        )
+        if (
+            startup_requires_turn_on_only
+            and self.applied_signature != startup_signature
+        ):
+            work_signature = startup_signature
+        else:
+            work_signature = latest_signature
+
+        if self.applied_signature == work_signature:
             return
 
-        ticks = self.latest_angle / 12
-        if self.latest_button_state == "released":
+        work_angle, work_button_state = work_signature
+        ticks = (work_angle - self.angle_offset) / 12
+        if (
+            self.off_startup_pending
+            and ticks > 0
+            and (
+                work_button_state == "pressed"
+                or self.restore_brightness
+            )
+        ):
+            self.startup_commands.append(work_signature)
+            self.angle_offset = work_angle
+            self.off_startup_pending = False
+        elif work_button_state == "released":
             target = clamp(
                 self.base_brightness_pct
                 + ticks * self.brightness_pct_per_tick,
@@ -111,7 +166,7 @@ class RotationGestureModel:
                 10000,
             )
             self.color_temp_commands.append(target)
-        self.applied_angle = self.latest_angle
+        self.applied_signature = work_signature
 
     def publish_all_delayed_brightness_states(self):
         for target in self.pending_brightness_publications:
@@ -303,6 +358,89 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertEqual(gesture.brightness_commands, [44, 48, 52])
         gesture.publish_all_delayed_brightness_states()
         self.assertEqual(gesture.entity_brightness_pct, 52)
+
+    def test_stop_packet_final_angle_is_applied_after_worker_delay(self):
+        gesture = RotationGestureModel(base_brightness_pct=40)
+        gesture.listener_capture(12)
+        gesture.listener_capture(24)
+        gesture.listener_stop(48)
+
+        gesture.worker_apply_latest()
+
+        self.assertTrue(gesture.listener_done)
+        self.assertEqual(gesture.brightness_commands, [56])
+
+        gesture.listener_stop()
+        self.assertEqual(gesture.latest_angle, 48)
+        self.assertEqual(gesture.latest_button_state, "released")
+
+    def test_coalesced_brightness_restore_consumes_only_startup_angle(self):
+        gesture = RotationGestureModel(
+            base_brightness_pct=40,
+            light_is_off=True,
+            restore_brightness=True,
+        )
+        for angle in (12, 24, 36):
+            gesture.listener_capture(angle, "released")
+
+        gesture.worker_apply_latest()
+        gesture.worker_apply_latest()
+
+        self.assertEqual(gesture.startup_commands, [(12, "released")])
+        self.assertEqual(gesture.angle_offset, 12)
+        self.assertEqual(gesture.brightness_commands, [48])
+        self.assertEqual(gesture.applied_signature, (36, "released"))
+
+    def test_coalesced_pressed_startup_consumes_only_startup_angle(self):
+        gesture = RotationGestureModel(
+            base_color_temp_k=4000,
+            light_is_off=True,
+        )
+        for angle in (12, 24, 36):
+            gesture.listener_capture(angle, "pressed")
+
+        gesture.worker_apply_latest()
+        gesture.worker_apply_latest()
+
+        self.assertEqual(gesture.startup_commands, [(12, "pressed")])
+        self.assertEqual(gesture.angle_offset, 12)
+        self.assertEqual(gesture.color_temp_commands, [4120])
+        self.assertEqual(gesture.applied_signature, (36, "pressed"))
+
+    def test_same_angle_button_change_is_a_fresh_worker_signature(self):
+        gesture = RotationGestureModel(
+            base_brightness_pct=40,
+            base_color_temp_k=4000,
+        )
+        gesture.listener_capture(12, "released")
+        gesture.worker_apply_latest()
+        gesture.listener_capture(12, "pressed")
+        gesture.worker_apply_latest()
+
+        self.assertEqual(gesture.brightness_commands, [44])
+        self.assertEqual(gesture.color_temp_commands, [4060])
+        self.assertEqual(gesture.applied_signature, (12, "pressed"))
+
+    def test_blueprint_tracks_stop_final_startup_and_full_signature(self):
+        source = load_source()
+        compact = compact_whitespace(source)
+
+        self.assertIn(
+            "ROTATION_LATEST_ACTION in ['rotation', 'stop_rotating']",
+            source,
+        )
+        self.assertIn("ROTATION_PACKET_ANGLE", source)
+        self.assertIn("ROTATION_STARTUP_ANGLE", source)
+        self.assertIn("ROTATION_STARTUP_BUTTON_STATE", source)
+        self.assertIn("ROTATION_APPLIED_BUTTON_STATE", source)
+        self.assertIn(
+            "ROTATION_APPLIED_BUTTON_STATE != ROTATION_LATEST_BUTTON_STATE",
+            compact,
+        )
+        self.assertIn(
+            "ROTATION_APPLIED_BUTTON_STATE == ROTATION_LATEST_BUTTON_STATE",
+            compact,
+        )
 
     def test_mqtt_value_templates_do_not_reference_trigger_variables(self):
         source = load_source()

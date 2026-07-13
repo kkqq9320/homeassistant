@@ -8,6 +8,38 @@
 
 **Tech Stack:** Home Assistant automation Blueprint YAML, Home Assistant Jinja templates, Python standard-library `unittest`, PyYAML and Jinja2 for static validation.
 
+## Final Review Correction Addendum
+
+This addendum supersedes the packet-per-run rotation architecture and any Core
+2024.08 compatibility statements in the original plan.
+
+- Raise the minimum to Home Assistant Core 2025.4. That release made `variables`
+  actions update existing variables across nested and parallel action scopes; the
+  corrected listener/worker design relies on this shared run scope.
+- Keep the global automation mode `queued`, `max: 1000`, and
+  `max_exceeded: warning`. Do not use global restart or parallel mode. Internal parallel
+  coordination blocks only pair an MQTT listener with a sequential worker, and
+  all light service commands remain sequential in the worker.
+- Filter top-level runs to `single`, `double`, `hold`, `release`, and
+  `start_rotating`. The active rotation listener consumes intermediate `rotation`
+  and terminal `stop_rotating` packets, so those packets no longer create traces.
+- For repeating Hold, start the stop listener before the initial user action. A
+  stop received during a slow action allows that action to finish but suppresses
+  every later repeat; Release or another semantic action stays queued normally.
+- For rotation, snapshot base brightness percentage and color temperature once at
+  gesture start. Capture the latest cumulative `action_rotation_angle`, calculate
+  signed ticks from that cumulative angle, and command absolute targets from the
+  gesture base. A single worker applies the latest unapplied target, including the
+  final captured angle, without rereading delayed light state.
+- Add deterministic standard-library models for delayed entity-state publication,
+  coalesced cumulative packets, and Release during a deliberately slow Hold action.
+  Retain YAML/Jinja parsing and representative arithmetic rendering.
+
+Final-review validation must cover the Core 2025.4 explanation, exact MQTT topic,
+raw payload filtering, stable selectors and input IDs, clamps, global queued mode,
+absence of global restart/parallel mode, sequential light commands, migration/forum
+text, output hashes, full tests, and `git diff --check`.
+
 ## Global Constraints
 
 - Keep `base_topic`, the manually entered Zigbee2MQTT `knob` friendly name, and the exact topic `{{ base_topic }}/{{ knob }}`. Do not add a Home Assistant device selector or an MQTT wildcard.

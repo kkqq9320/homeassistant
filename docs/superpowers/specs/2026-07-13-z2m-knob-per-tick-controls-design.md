@@ -13,14 +13,32 @@ input descriptions. Atomic MQTT payload handling, queued execution, Hold and
 Release actions, brightness restoration, min/max limits, transition behavior,
 and pressed/released rotation mappings remain unchanged.
 
+## Final Review Correction
+
+The original packet-local calculation was vulnerable to delayed light state and
+is superseded by gesture-level cumulative processing:
+
+- Require Home Assistant Core 2025.4. Its `variables` action can update an
+  existing variable across nested and parallel action scopes, which the shared
+  listener/worker run state requires.
+- Keep the global mode `queued`. Internal parallel blocks are limited to an MQTT
+  listener beside one sequential worker; light service commands remain sequential
+  and never run in competing branches.
+- Start one rotation run on `start_rotating`. Its listener consumes `rotation` and
+  `stop_rotating`, captures the newest cumulative angle and button state, and ends
+  on a different action or bounded inactivity timeout. Intermediate packets may be
+  coalesced, reducing top-level traces without losing movement.
+- Snapshot base brightness and color temperature once at gesture start. Every
+  command is an absolute target computed from that base plus the cumulative signed
+  angle. Never rebase from an entity state that may still reflect an earlier command.
+
 ## Tick and Event Model
 
 - Treat 12 degrees as one knob tick. This value is an internal constant and is
   not exposed in the Blueprint UI.
-- Continue reading the packet-local increment from
-  `trigger.payload_json.action_rotation_angle_speed`. Do not read a derived
-  entity or retain the previous MQTT message.
-- Calculate signed ticks as `action_rotation_angle_speed / 12`.
+- Read the newest cumulative `action_rotation_angle` from the active gesture's
+  MQTT listener. Do not read a derived entity or retain previous-message state.
+- Calculate signed ticks as `(cumulative_angle - gesture_angle_offset) / 12`.
 - Do not round the tick count before applying it. Captured device values are
   multiples of 12, while a future non-multiple value will remain proportional
   instead of being discarded.
@@ -29,7 +47,7 @@ and pressed/released rotation mappings remain unchanged.
 
 Examples:
 
-| Packet-local angle | Tick delta | At 1%/tick | At 60 K/tick |
+| Cumulative gesture angle | Tick delta | At 1%/tick | At 60 K/tick |
 | ---: | ---: | ---: | ---: |
 | 12 | 1 | 1% | 60 K |
 | 60 | 5 | 5% | 300 K |
@@ -78,15 +96,17 @@ The calculated target remains clamped to `color_temp_min` and
 Use direct units and remove the legacy brightness conversion coefficients.
 
 ```text
-rotation_ticks = action_rotation_angle_speed / 12
-brightness_delta_pct = rotation_ticks * brightness_pct_per_tick
-color_temp_delta_k = rotation_ticks * color_temp_k_per_tick
+rotation_ticks = (cumulative_angle - gesture_angle_offset) / 12
+brightness_target = base_brightness_pct + rotation_ticks * brightness_pct_per_tick
+color_temp_target = base_color_temp_k + rotation_ticks * color_temp_k_per_tick
 ```
 
-Brightness applies `brightness_delta_pct` to the current brightness percentage,
-then keeps the existing integer rounding and configured min/max clamp. Color
-temperature applies `color_temp_delta_k` to the existing color-temperature base
-and keeps the existing Kelvin min/max clamp.
+Brightness and color temperature apply those absolute targets with the existing
+rounding and configured min/max clamps. The base values are captured once at
+gesture start; later commands do not reread brightness or color temperature. If a
+restore-only positive startup packet is consumed, its cumulative angle becomes the
+gesture offset so later movement starts from the restored base without double-counting
+the startup packet.
 
 The implementation must not retain the legacy `/ 3.6 / 3`, `2.54`, or the
 conversion of the requested delta into a 0-255 value and back. Converting the
@@ -98,6 +118,8 @@ removes the avoidable round trip and its extra rounding.
 
 This is a breaking semantic change for saved Blueprint inputs:
 
+- Home Assistant Core 2025.4 is now the minimum version because the Blueprint uses
+  variables shared across nested and parallel action scopes.
 - The IDs `brightness_stepsize` and `color_temp_stepsize` remain accepted, but
   their old multiplier meaning is deprecated.
 - A saved brightness value of `4` becomes exactly `4%/tick`; this is close to
@@ -119,6 +141,8 @@ This is a breaking semantic change for saved Blueprint inputs:
 Use the following facts when updating the Home Assistant forum post:
 
 > **Breaking change: rotation sensitivity now uses direct per-tick units.**
+> This Blueprint now requires Home Assistant Core 2025.4 because Hold and rotation
+> coordination relies on variables shared across nested and parallel action scopes.
 > One Aqara knob tick is treated as 12 degrees. Brightness can now be configured
 > from 1-10% per tick (default 4%), and pressed-rotation color temperature from
 > 1-10000 K per tick (default 60 K). A five-tick/60-degree event applies five
@@ -127,20 +151,22 @@ Use the following facts when updating the Home Assistant forum post:
 > review the two rotation values, and save. In particular, change a previous
 > color-temperature stepsize of 5 to 60 K/tick to preserve the old response,
 > and replace any previous brightness value above 10 with a value from 1-10.
+> The global automation mode remains queued. Internal parallelism only keeps a
+> listener active beside a sequential worker, so light commands remain sequential.
+> Rotation now uses one gesture's cumulative angle and creates fewer intermediate
+> automation traces.
 
 The final forum text may add a release version or link, but must not change the
 migration facts above.
 
 ## Error Handling and Limits
 
-- Missing, null, or nonnumeric `action_rotation_angle_speed` continues to
-  resolve to zero and causes no rotation action.
-- `stop_rotating` continues to cause no light adjustment because its packet-local
-  increment is zero.
+- Missing, null, or nonnumeric cumulative `action_rotation_angle` resolves to zero.
+- `stop_rotating` ends the gesture listener and causes no top-level light run.
 - Brightness and color-temperature results remain clamped to their configured
   ranges.
-- Queued automation mode remains unchanged so packets cannot race while reading
-  and updating a light.
+- Global queued automation mode remains unchanged. The one gesture worker is the
+  only branch allowed to update a light.
 
 ## Verification
 
@@ -152,8 +178,11 @@ Extend the standard-library tests to prove:
   and 7% respectively.
 - With color temperature set to 60, the same angles produce 60 K, 300 K,
   -120 K, and 420 K respectively.
-- Rotation still reads `action_rotation_angle_speed` from the current trigger
-  payload, and the Blueprint remains in queued mode.
+- Rotation reads cumulative `action_rotation_angle` in one gesture run, and the
+  Blueprint remains in global queued mode.
+- Coalescing intermediate packets preserves the final absolute target.
+- A delayed entity-state simulation ends at the full cumulative target rather than
+  losing ticks.
 - Legacy brightness coefficients and descriptions are absent.
 - The Blueprint description contains the breaking-change and migration notice.
 
@@ -167,5 +196,9 @@ user-facing output copy is byte-identical to the tested Blueprint.
   <https://www.home-assistant.io/docs/blueprint/selectors/>
 - Home Assistant automation trigger data:
   <https://www.home-assistant.io/docs/automation/templating/>
+- Home Assistant 2025.4 variable-scope change:
+  <https://www.home-assistant.io/blog/2025/04/02/release-20254/>
+- Home Assistant script variable and parallel-action scopes:
+  <https://www.home-assistant.io/docs/scripts/>
 - Zigbee2MQTT Aqara ZNXNKG02LM exposes:
   <https://www.zigbee2mqtt.io/devices/ZNXNKG02LM.html>

@@ -347,7 +347,7 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
             r"(?s)conditions: \"{{ ACTION == 'release' }}\"\s+"
             r"sequence: !input action_release",
         )
-        self.assertIn("HOLD_REPEAT_MODE != 'none'", source)
+        self.assertIn("HOLD_REPEAT_MODE == 'none'", source)
         self.assertRegex(
             source,
             r"(?s)HOLD_REPEAT_MODE == 'repeat_hold'.*?"

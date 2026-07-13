@@ -6,7 +6,9 @@ blueprint:
       - Supports Zigbee2MQTT versions, including 2.0.0 and later updates. (It is expected to work on lower versions as well.)
 
     ## Prerequisites
-      - Requires at least **Home Assistant Core `2024.08`** version.
+      - Requires at least **Home Assistant Core `2025.4`** version.
+      - Home Assistant 2025.4 made variables accessible across nested and parallel action
+        scopes. The Hold and rotation listeners rely on that shared run-scope behavior.
       - The knob only works when connected via `Zigbee2MQTT`.
       - The operation mode of the knob must be set to `event`. It is unknown whether it works in `command` mode.
       
@@ -15,8 +17,13 @@ blueprint:
 
       - The blueprint consumes each JSON event directly from the Zigbee2MQTT device topic.
         It does not depend on generated Home Assistant sensor entity IDs.
-      - MQTT events are queued and processed in arrival order. Rotation uses the
-        `action_rotation_angle_speed` increment contained in that same JSON message.
+      - The global automation mode remains `queued`; internal parallel blocks only keep
+        a listener alive beside one sequential worker. Light service commands never run
+        in multiple branches.
+      - Rotation is processed as one gesture from `start_rotating` through
+        `stop_rotating`. The listener keeps the newest cumulative
+        `action_rotation_angle`, so intermediate rotation packets may be coalesced and
+        no longer create separate top-level traces.
 
     ## Breaking Change: Direct Per-Tick Controls
       - The legacy step-size multiplier behavior is deprecated. The existing input IDs are retained, but their values now have direct physical meanings.
@@ -327,13 +334,13 @@ trigger:
     topic: "{{ base_topic }}/{{ knob }}"
     payload: action
     value_template: >-
-      {{ 'action' if value_json.action | default('') else 'ignore' }}
+      {{ 'action' if value_json.action | default('') in
+        ['single', 'double', 'hold', 'release', 'start_rotating']
+        else 'ignore' }}
 
 action:
   - variables:
       ACTION: "{{ trigger.payload_json.action | default('') }}"
-      ROTATION_DELTA: "{{ trigger.payload_json.action_rotation_angle_speed | float(0) }}"
-      BUTTON_STATE: "{{ trigger.payload_json.action_rotation_button_state | default('', true) }}"
       TARGET_LIGHT: !input target_light
       KNOB_MIN_BRIGHT_PCT: !input knob_control_min_brightness
       KNOB_MAX_BRIGHT_PCT: !input knob_control_max_brightness
@@ -347,6 +354,55 @@ action:
       HOLD_REPEAT_MODE: !input hold_repeat_mode
       HOLD_REPEAT_INTERVAL: !input hold_repeat_interval
       HOLD_REPEAT_MAX_DURATION: !input hold_repeat_max_duration
+      HOLD_DEADLINE: >-
+        {{ as_timestamp(now()) +
+          (HOLD_REPEAT_MAX_DURATION | float(60)) }}
+      HOLD_STOPPED: false
+      ROTATION_LATEST_ACTION: "{{ trigger.payload_json.action | default('') }}"
+      ROTATION_LATEST_ANGLE: >-
+        {{ trigger.payload_json.action_rotation_angle | float(0) }}
+      ROTATION_LATEST_BUTTON_STATE: >-
+        {{ trigger.payload_json.action_rotation_button_state |
+          default('', true) }}
+      ROTATION_LISTENER_DONE: false
+      ROTATION_APPLIED_ANGLE: null
+      ROTATION_ANGLE_OFFSET: 0
+      ROTATION_OFF_STARTUP_PENDING: >-
+        {{ states(TARGET_LIGHT) == 'off' }}
+
+  - variables:
+      ROTATION_BASE_BRIGHTNESS_PCT: >-
+        {{ (state_attr(TARGET_LIGHT, 'brightness') |
+          float(0) / 255 * 100) | round(0) }}
+      ROTATION_LIGHT_TEMP_MIN: >-
+        {{ state_attr(TARGET_LIGHT, 'min_color_temp_kelvin') |
+          int(TEMP_MIN | int) }}
+      ROTATION_LIGHT_TEMP_MAX: >-
+        {{ state_attr(TARGET_LIGHT, 'max_color_temp_kelvin') |
+          int(TEMP_MAX | int) }}
+
+  - variables:
+      ROTATION_COLOR_TEMP_MIN: >-
+        {{ max(TEMP_MIN | int, ROTATION_LIGHT_TEMP_MIN | int) }}
+      ROTATION_COLOR_TEMP_MAX: >-
+        {{ min(TEMP_MAX | int, ROTATION_LIGHT_TEMP_MAX | int) }}
+
+  - variables:
+      ROTATION_BASE_COLOR_TEMP_K: >-
+        {% set gesture_start_temp =
+          state_attr(TARGET_LIGHT, 'color_temp_kelvin') %}
+        {% if gesture_start_temp is not none %}
+          {{ gesture_start_temp | int }}
+        {% else %}
+          {{ min(ROTATION_COLOR_TEMP_MAX | int,
+            max(ROTATION_COLOR_TEMP_MIN | int, TEMP_BASE | int)) }}
+        {% endif %}
+
+  - variables:
+      ROTATION_LAST_BRIGHTNESS_TARGET: >-
+        {{ ROTATION_BASE_BRIGHTNESS_PCT | round(0) }}
+      ROTATION_LAST_COLOR_TEMP_TARGET: >-
+        {{ ROTATION_BASE_COLOR_TEMP_K | int }}
 
   - choose:
       - conditions: "{{ ACTION == 'single' }}"
@@ -360,168 +416,260 @@ action:
 
       - conditions: "{{ ACTION == 'hold' }}"
         sequence:
-          - variables:
-              HOLD_DEADLINE: >-
-                {{ as_timestamp(now()) +
-                  (HOLD_REPEAT_MAX_DURATION | float(60)) }}
-              HOLD_STOPPED: false
-
-          - choose:
-              - conditions: "{{ true }}"
-                sequence: !input action_hold
-
           - if:
               - condition: template
-                value_template: "{{ HOLD_REPEAT_MODE != 'none' }}"
+                value_template: "{{ HOLD_REPEAT_MODE == 'none' }}"
             then:
-              - repeat:
-                  while:
-                    - condition: template
-                      value_template: >-
-                        {{ not HOLD_STOPPED and
-                          as_timestamp(now()) < (HOLD_DEADLINE | float(0)) }}
-                  sequence:
-                    - variables:
-                        HOLD_REMAINING: >-
-                          {{ max(0,
-                            (HOLD_DEADLINE | float(0)) -
-                            as_timestamp(now())) }}
+              - choose:
+                  - conditions: "{{ true }}"
+                    sequence: !input action_hold
+            else:
+              - parallel:
+                  - alias: Hold stop listener
+                    sequence:
+                      - wait_for_trigger:
+                          - platform: mqtt
+                            topic: "{{ base_topic }}/{{ knob }}"
+                            payload: action
+                            value_template: >-
+                              {{ 'action' if value_json.action | default('') else 'ignore' }}
+                        timeout:
+                          seconds: >-
+                            {{ max(0,
+                              (HOLD_DEADLINE | float(0)) -
+                              as_timestamp(now())) }}
+                        continue_on_timeout: true
 
-                    - wait_for_trigger:
-                        - platform: mqtt
-                          topic: "{{ base_topic }}/{{ knob }}"
-                          payload: action
-                          value_template: >-
-                            {{ 'action' if value_json.action | default('') else 'ignore' }}
-                      timeout:
-                        seconds: >-
-                          {{ min(HOLD_REPEAT_INTERVAL | float(0.5),
-                            HOLD_REMAINING | float(0)) }}
-                      continue_on_timeout: true
+                      - variables:
+                          HOLD_STOPPED: true
 
-                    - if:
+                  - alias: Hold repeat worker
+                    sequence:
+                      - delay:
+                          milliseconds: 1
+
+                      - choose:
+                          - conditions: "{{ true }}"
+                            sequence: !input action_hold
+
+                      - repeat:
+                          while:
+                            - condition: template
+                              value_template: >-
+                                {{ not HOLD_STOPPED and
+                                  as_timestamp(now()) <
+                                    (HOLD_DEADLINE | float(0)) }}
+                          sequence:
+                            - variables:
+                                HOLD_WORKER_REMAINING: >-
+                                  {{ max(0,
+                                    (HOLD_DEADLINE | float(0)) -
+                                    as_timestamp(now())) }}
+
+                            - delay:
+                                seconds: >-
+                                  {{ min(HOLD_REPEAT_INTERVAL | float(0.5),
+                                    HOLD_WORKER_REMAINING | float(0)) }}
+
+                            - if:
+                                - condition: template
+                                  value_template: >-
+                                    {{ not HOLD_STOPPED and
+                                      as_timestamp(now()) <
+                                        (HOLD_DEADLINE | float(0)) }}
+                              then:
+                                - choose:
+                                    - conditions: "{{ HOLD_REPEAT_MODE == 'repeat_hold' }}"
+                                      sequence: !input action_hold
+                                    - conditions: "{{ HOLD_REPEAT_MODE == 'separate_repeat' }}"
+                                      sequence: !input action_hold_repeat
+
+      - conditions: "{{ ACTION == 'start_rotating' }}"
+        sequence:
+          - parallel:
+              - alias: Rotation gesture listener
+                sequence:
+                  - repeat:
+                      sequence:
+                        - wait_for_trigger:
+                            - platform: mqtt
+                              topic: "{{ base_topic }}/{{ knob }}"
+                              payload: action
+                              value_template: >-
+                                {{ 'action' if value_json.action | default('') else 'ignore' }}
+                          timeout:
+                            seconds: 2
+                          continue_on_timeout: true
+
+                        - if:
+                            - condition: template
+                              value_template: "{{ wait.completed }}"
+                          then:
+                            - variables:
+                                ROTATION_LATEST_ACTION: >-
+                                  {{ wait.trigger.payload_json.action |
+                                    default('') }}
+
+                            - if:
+                                - condition: template
+                                  value_template: >-
+                                    {{ ROTATION_LATEST_ACTION ==
+                                      'rotation' }}
+                              then:
+                                - variables:
+                                    ROTATION_LATEST_ANGLE: >-
+                                      {{ wait.trigger.payload_json.action_rotation_angle | float(0) }}
+                                    ROTATION_LATEST_BUTTON_STATE: >-
+                                      {{ wait.trigger.payload_json.action_rotation_button_state |
+                                        default('', true) }}
+                              else:
+                                - variables:
+                                    ROTATION_LISTENER_DONE: true
+                          else:
+                            - variables:
+                                ROTATION_LISTENER_DONE: true
+                      until:
                         - condition: template
-                          value_template: "{{ wait.completed }}"
-                      then:
-                        - variables:
-                            HOLD_STOPPED: true
-                      else:
+                          value_template: "{{ ROTATION_LISTENER_DONE }}"
+
+              - alias: Sequential light command worker
+                sequence:
+                  - delay:
+                      milliseconds: 1
+
+                  - repeat:
+                      sequence:
                         - if:
                             - condition: template
                               value_template: >-
-                                {{ as_timestamp(now()) <
-                                  (HOLD_DEADLINE | float(0)) }}
+                                {{ ROTATION_APPLIED_ANGLE is none or
+                                  ROTATION_APPLIED_ANGLE | float(0) !=
+                                    ROTATION_LATEST_ANGLE | float(0) }}
                           then:
+                            - variables:
+                                ROTATION_WORK_ANGLE: >-
+                                  {{ ROTATION_LATEST_ANGLE | float(0) }}
+                                ROTATION_WORK_BUTTON_STATE: >-
+                                  {{ ROTATION_LATEST_BUTTON_STATE }}
+
+                            - variables:
+                                ROTATION_TICKS: >-
+                                  {{ ((ROTATION_WORK_ANGLE | float(0)) -
+                                    (ROTATION_ANGLE_OFFSET | float(0))) / 12 }}
+
                             - choose:
-                                - conditions: "{{ HOLD_REPEAT_MODE == 'repeat_hold' }}"
-                                  sequence: !input action_hold
-                                - conditions: "{{ HOLD_REPEAT_MODE == 'separate_repeat' }}"
-                                  sequence: !input action_hold_repeat
+                                - conditions: >-
+                                    {{ ROTATION_WORK_BUTTON_STATE ==
+                                      'released' }}
+                                  sequence:
+                                    - variables:
+                                        BRIGHTNESS_TARGET_PCT: >-
+                                          {{ min(KNOB_MAX_BRIGHT_PCT | int,
+                                            max(KNOB_MIN_BRIGHT_PCT | int,
+                                              ROTATION_BASE_BRIGHTNESS_PCT | float(0) +
+                                              ROTATION_TICKS | float(0) *
+                                              BRIGHTNESS_STEP_PCT | float(0))) }}
 
-      - conditions: >-
-          {{ ACTION in ['start_rotating', 'rotation'] and
-            ROTATION_DELTA | float(0) != 0 }}
-        sequence:
-          - variables:
-              ROTATION_TICKS: >-
-                {{ ROTATION_DELTA | float(0) / 12 }}
+                                    - if:
+                                        - condition: template
+                                          value_template: >-
+                                            {{ ROTATION_OFF_STARTUP_PENDING and
+                                              RESTORE_BRIGHTNESS and
+                                              ROTATION_TICKS | float(0) > 0 }}
+                                      then:
+                                        - action: light.turn_on
+                                          target:
+                                            entity_id: "{{ TARGET_LIGHT }}"
+                                          data:
+                                            transition: "{{ TRANSITION_TIME }}"
 
-          - variables:
-              BRIGHTNESS_DELTA_PCT: >-
-                {{ (ROTATION_TICKS | float(0)) *
-                  (BRIGHTNESS_STEP_PCT | float(0)) }}
-              COLOR_TEMP_DELTA_K: >-
-                {{ (ROTATION_TICKS | float(0)) *
-                  (COLOR_TEMP_STEP_K | float(0)) }}
+                                        - variables:
+                                            ROTATION_ANGLE_OFFSET: >-
+                                              {{ ROTATION_WORK_ANGLE | float(0) }}
+                                            ROTATION_OFF_STARTUP_PENDING: false
+                                      else:
+                                        - if:
+                                            - condition: template
+                                              value_template: >-
+                                                {{ BRIGHTNESS_TARGET_PCT |
+                                                  round(0) !=
+                                                  ROTATION_LAST_BRIGHTNESS_TARGET |
+                                                  round(0) }}
+                                          then:
+                                            - action: light.turn_on
+                                              target:
+                                                entity_id: "{{ TARGET_LIGHT }}"
+                                              data:
+                                                transition: "{{ TRANSITION_TIME }}"
+                                                brightness_pct: >-
+                                                  {{ BRIGHTNESS_TARGET_PCT |
+                                                    round(0) }}
 
-          - choose:
-              - conditions: "{{ BUTTON_STATE == 'released' }}"
-                sequence:
-                  - if:
-                      - condition: template
-                        value_template: >-
-                          {{ states(TARGET_LIGHT) == 'off' and
-                            RESTORE_BRIGHTNESS and
-                            BRIGHTNESS_DELTA_PCT | float(0) > 0 }}
-                    then:
-                      - action: light.turn_on
-                        target:
-                          entity_id: "{{ TARGET_LIGHT }}"
-                        data:
-                          transition: "{{ TRANSITION_TIME }}"
-                    else:
-                      - variables:
-                          CURRENT_PCT: >-
-                            {{ (state_attr(TARGET_LIGHT, 'brightness') |
-                              float(0) / 255 * 100) | round(0) }}
-                          PROPOSED_PCT: >-
-                            {{ ((CURRENT_PCT | float(0)) +
-                              (BRIGHTNESS_DELTA_PCT | float(0))) |
-                              round(0) }}
-                          CLAMPED_PCT: >-
-                            {{ min(KNOB_MAX_BRIGHT_PCT | int,
-                              max(KNOB_MIN_BRIGHT_PCT | int,
-                                PROPOSED_PCT | int)) }}
+                                            - variables:
+                                                ROTATION_LAST_BRIGHTNESS_TARGET: >-
+                                                  {{ BRIGHTNESS_TARGET_PCT |
+                                                    round(0) }}
+                                                ROTATION_OFF_STARTUP_PENDING: false
 
-                      - if:
-                          - condition: template
-                            value_template: >-
-                              {{ CLAMPED_PCT | int !=
-                                CURRENT_PCT | int }}
-                        then:
-                          - action: light.turn_on
-                            target:
-                              entity_id: "{{ TARGET_LIGHT }}"
-                            data:
-                              transition: "{{ TRANSITION_TIME }}"
-                              brightness_pct: "{{ CLAMPED_PCT }}"
+                                - conditions: >-
+                                    {{ ROTATION_WORK_BUTTON_STATE ==
+                                      'pressed' }}
+                                  sequence:
+                                    - variables:
+                                        COLOR_TEMP_TARGET_K: >-
+                                          {{ min(ROTATION_COLOR_TEMP_MAX | int,
+                                            max(ROTATION_COLOR_TEMP_MIN | int,
+                                              ROTATION_BASE_COLOR_TEMP_K | int +
+                                              ROTATION_TICKS | float(0) *
+                                              COLOR_TEMP_STEP_K | float(0))) }}
 
-              - conditions: "{{ BUTTON_STATE == 'pressed' }}"
-                sequence:
-                  - if:
-                      - condition: template
-                        value_template: >-
-                          {{ states(TARGET_LIGHT) == 'off' and
-                            COLOR_TEMP_DELTA_K | float(0) > 0 }}
-                    then:
-                      - action: light.turn_on
-                        target:
-                          entity_id: "{{ TARGET_LIGHT }}"
-                        data:
-                          transition: "{{ TRANSITION_TIME }}"
-                    else:
-                      - variables:
-                          LIGHT_TEMP_MIN: >-
-                            {{ state_attr(TARGET_LIGHT,
-                              'min_color_temp_kelvin') |
-                              int(TEMP_MIN | int) }}
-                          LIGHT_TEMP_MAX: >-
-                            {{ state_attr(TARGET_LIGHT,
-                              'max_color_temp_kelvin') |
-                              int(TEMP_MAX | int) }}
-                          COLOR_TEMP_MIN: >-
-                            {{ max(TEMP_MIN | int,
-                              LIGHT_TEMP_MIN | int) }}
-                          COLOR_TEMP_MAX: >-
-                            {{ min(TEMP_MAX | int,
-                              LIGHT_TEMP_MAX | int) }}
-                          SAFE_TEMP_BASE: >-
-                            {{ min(COLOR_TEMP_MAX,
-                              max(COLOR_TEMP_MIN, TEMP_BASE | int)) }}
-                          CURRENT_TEMP: >-
-                            {% if state_attr(TARGET_LIGHT, 'color_temp_kelvin') is not none %}
-                              {{ state_attr(TARGET_LIGHT, 'color_temp_kelvin') | int }}
-                            {% else %}
-                              {{ SAFE_TEMP_BASE }}
-                            {% endif %}
+                                    - if:
+                                        - condition: template
+                                          value_template: >-
+                                            {{ ROTATION_OFF_STARTUP_PENDING and
+                                              ROTATION_TICKS | float(0) > 0 }}
+                                      then:
+                                        - action: light.turn_on
+                                          target:
+                                            entity_id: "{{ TARGET_LIGHT }}"
+                                          data:
+                                            transition: "{{ TRANSITION_TIME }}"
 
-                      - action: light.turn_on
-                        target:
-                          entity_id: "{{ TARGET_LIGHT }}"
-                        data:
-                          transition: "{{ TRANSITION_TIME }}"
-                          color_temp_kelvin: >-
-                            {{ min(COLOR_TEMP_MAX,
-                              max(COLOR_TEMP_MIN,
-                                CURRENT_TEMP | int +
-                                COLOR_TEMP_DELTA_K | float(0))) }}
+                                        - variables:
+                                            ROTATION_ANGLE_OFFSET: >-
+                                              {{ ROTATION_WORK_ANGLE | float(0) }}
+                                            ROTATION_OFF_STARTUP_PENDING: false
+                                      else:
+                                        - if:
+                                            - condition: template
+                                              value_template: >-
+                                                {{ COLOR_TEMP_TARGET_K | int !=
+                                                  ROTATION_LAST_COLOR_TEMP_TARGET |
+                                                  int }}
+                                          then:
+                                            - action: light.turn_on
+                                              target:
+                                                entity_id: "{{ TARGET_LIGHT }}"
+                                              data:
+                                                transition: "{{ TRANSITION_TIME }}"
+                                                color_temp_kelvin: >-
+                                                  {{ COLOR_TEMP_TARGET_K | int }}
+
+                                            - variables:
+                                                ROTATION_LAST_COLOR_TEMP_TARGET: >-
+                                                  {{ COLOR_TEMP_TARGET_K | int }}
+                                                ROTATION_OFF_STARTUP_PENDING: false
+
+                            - variables:
+                                ROTATION_APPLIED_ANGLE: >-
+                                  {{ ROTATION_WORK_ANGLE | float(0) }}
+                          else:
+                            - delay:
+                                milliseconds: 25
+                      until:
+                        - condition: template
+                          value_template: >-
+                            {{ ROTATION_LISTENER_DONE and
+                              ROTATION_APPLIED_ANGLE is not none and
+                              ROTATION_APPLIED_ANGLE | float(0) ==
+                                ROTATION_LATEST_ANGLE | float(0) }}

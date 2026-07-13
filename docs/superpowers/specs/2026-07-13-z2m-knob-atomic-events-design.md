@@ -47,8 +47,9 @@ in the original design below.
 - Start top-level semantic actions and rotation gesture starts as independent runs.
   This prevents a slow press action from delaying the rotation listener.
 - Use cumulative `action_rotation_angle` within one gesture run. One tick is 12
-  degrees, and the worker calculates each absolute target from the gesture-start
-  snapshot rather than the integration's possibly delayed entity state.
+  degrees, and the worker calculates each absolute target from one stable base: the
+  gesture-start snapshot for an already-on light, or the one-time refreshed base after
+  an off-light restore. It does not rebase from later delayed entity states.
 - Treat `stop_rotating`, another action, or a bounded inactivity timeout as the end
   of the active gesture.
 - Capture any angle or button state supplied by `stop_rotating` before marking the

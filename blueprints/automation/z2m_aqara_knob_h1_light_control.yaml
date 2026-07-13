@@ -314,21 +314,12 @@ trace:
 trigger_variables:
   base_topic: !input base_topic
   knob: !input knob
-  ACTION_VALUES:
-    - 'single'
-    - 'double'
-    - 'hold'
-    - 'release'
-    - 'start_rotating'
-    - 'rotation'
-    - 'stop_rotating'
 trigger:
   - platform: mqtt
     topic: "{{ base_topic }}/{{ knob }}"
     payload: action
     value_template: >-
-      {{ 'action' if value_json.action | default('') in ACTION_VALUES
-        else 'ignore' }}
+      {{ 'action' if value_json.action | default('') else 'ignore' }}
 
 action:
   - variables:
@@ -393,8 +384,7 @@ action:
                           topic: "{{ base_topic }}/{{ knob }}"
                           payload: action
                           value_template: >-
-                            {{ 'action' if value_json.action | default('') in ACTION_VALUES
-                              else 'ignore' }}
+                            {{ 'action' if value_json.action | default('') else 'ignore' }}
                       timeout:
                         seconds: >-
                           {{ min(HOLD_REPEAT_INTERVAL | float(0.5),

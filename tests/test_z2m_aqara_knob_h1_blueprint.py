@@ -26,16 +26,17 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertIn('topic: "{{ base_topic }}/{{ knob }}"', source)
         self.assertNotIn('/{{ knob }}/action', source)
         self.assertIn("value_json.action", source)
-        for action in (
-            "single",
-            "double",
-            "hold",
-            "release",
-            "start_rotating",
-            "rotation",
-            "stop_rotating",
-        ):
-            self.assertIn(f"'{action}'", source)
+
+    def test_mqtt_value_templates_do_not_reference_trigger_variables(self):
+        source = load_source()
+
+        self.assertNotIn("ACTION_VALUES", source)
+        self.assertEqual(
+            source.count(
+                "'action' if value_json.action | default('') else 'ignore'"
+            ),
+            2,
+        )
 
     def test_reads_each_rotation_delta_from_the_same_payload(self):
         source = load_source()
@@ -98,7 +99,10 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
             r"(?s)value_template: \"{{ wait.completed }}\".*?"
             r"HOLD_STOPPED: true",
         )
-        self.assertIn("value_json.action | default('') in ACTION_VALUES", source)
+        self.assertIn(
+            "'action' if value_json.action | default('') else 'ignore'",
+            source,
+        )
 
     def test_queue_capacity_is_large_and_overflow_is_visible(self):
         source = load_source()

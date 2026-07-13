@@ -7,7 +7,7 @@ Update `z2m_aqara_knob_h1_light_control.yaml` so every knob update is derived fr
 ## Event model
 
 - Subscribe to `{{ base_topic }}/{{ knob }}`.
-- Filter the root-topic MQTT trigger by `value_json.action` so only the seven actionable messages create automation runs.
+- Filter the root-topic MQTT trigger using only the incoming `value_json.action` value, so messages with no action do not create automation runs. Do not reference `trigger_variables` from the MQTT `value_template`, because Home Assistant does not pass them into incoming-payload rendering.
 - Queue every actionable message at arrival and process runs in order.
 - Use `action_rotation_angle_speed` as the packet-local rotation increment. The captured right, left, and pressed sequences show that it exactly equals `current action_rotation_angle - previous action_rotation_angle`, so no previous-message state or MQTT wait window is required.
 - Ignore `stop_rotating` for light adjustment because its increment is zero.

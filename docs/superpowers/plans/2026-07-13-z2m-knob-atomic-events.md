@@ -32,7 +32,7 @@
 - [ ] **Step 1: Write the failing test**
 
   Read the Blueprint with the standard library, then assert:
-  - one root-topic trigger accepts all seven actionable messages through `value_json.action`;
+  - one root-topic trigger accepts messages with a non-empty `value_json.action` without referencing trigger variables from the MQTT value template;
   - automation mode is `queued` and Core 2024.08-compatible `platform: mqtt` syntax is used;
   - no `states(SENSOR_...)` or derived sensor entity IDs remain;
   - inputs include `action_release`, `hold_repeat_mode`, `action_hold_repeat`, `hold_repeat_interval`, and `hold_repeat_max_duration`;

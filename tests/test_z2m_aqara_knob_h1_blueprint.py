@@ -1,6 +1,8 @@
 from pathlib import Path
+import re
 import unittest
 
+from jinja2 import Environment
 import yaml
 
 
@@ -35,7 +37,27 @@ def blueprint_inputs(document):
     return flattened
 
 
+def nested_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from nested_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from nested_strings(child)
+
+
 class AqaraKnobBlueprintTest(unittest.TestCase):
+    def test_all_jinja_templates_parse(self):
+        _, document = load_blueprint()
+        environment = Environment()
+
+        for value in nested_strings(document):
+            if "{{" in value or "{%" in value:
+                with self.subTest(template=value):
+                    environment.parse(value)
+
     def test_filters_atomic_device_messages_into_high_level_runs(self):
         _, document = load_blueprint()
         triggers = document["trigger"]
@@ -63,6 +85,13 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertNotIn("_action_rotation_button_state", source)
         self.assertNotIn("_action_rotation_percent", source)
         self.assertNotIn("_action_rotation_angle", source)
+
+    def test_every_blueprint_input_reference_is_defined(self):
+        source, document = load_blueprint()
+        defined_inputs = set(blueprint_inputs(document))
+        referenced_inputs = set(re.findall(r"!input\s+([a-zA-Z0-9_]+)", source))
+
+        self.assertEqual(referenced_inputs - defined_inputs, set())
 
     def test_exposes_hold_repeat_modes_and_release_action(self):
         _, document = load_blueprint()

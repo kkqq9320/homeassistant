@@ -18,6 +18,15 @@ blueprint:
       - MQTT events are queued and processed in arrival order. Rotation uses the
         `action_rotation_angle_speed` increment contained in that same JSON message.
 
+    ## Breaking Change: Direct Per-Tick Controls
+      - The legacy step-size multiplier behavior is deprecated. The existing input IDs are retained, but their values now have direct physical meanings.
+      - One knob tick is `12 degrees`.
+      - Brightness is now configured as `1-10 %/tick`; the default is exactly `4 %/tick`.
+      - Pressed-rotation color temperature is now configured as `1-10000 K/tick`; the default is `60 K/tick`.
+      - After re-importing this blueprint, open every automation created from it, review these two inputs, and save it again.
+      - Existing brightness values above `10` are no longer valid and must be changed to a value from `1` through `10`.
+      - To preserve the old default color-temperature response, change a saved value of `5` to `60 K/tick`.
+
     ## Customizing Options
 
       - It's a bit unfortunate to forgo the UI dropdown to support Jinja2 templates, but this allows setting `target_light` dynamically, such as using the state of an `input_select` or other flexible configurations.
@@ -245,35 +254,34 @@ blueprint:
               mode: slider
 
         brightness_stepsize:
-          name: Brightness Stepsize
+          name: Brightness per Tick
           description:
-            Set the step size for brightness adjustment when moving the knob by one tick.
-            <br>If set to the default value of `4`, each tick adjusts the brightness by approximately `2%`.
-            <br>Adjust as needed after testing.
-            <br>If you want to increase brightness by approximately `1%` per tick, set the value to `+2`.
-            <br>The default value is `4`
+            Set the exact brightness percentage change for one 12-degree knob tick.
+            <br>For example, `1` means `1%` per tick and a 60-degree packet changes brightness by `5%`.
+            <br>The default value is `4%` per tick.
           default: 4
           selector:
             number:
               min: 1
-              max: 100
+              max: 10
               step: 1
-              unit_of_measurement: /2 = %
+              unit_of_measurement: "%/tick"
               mode: slider
 
         color_temp_stepsize:
-          name: Color Temp Stepsize
+          name: Color Temperature per Tick
           description:
-            Set the step size for adjusting the color temperature when turning the knob while pressing it.
-            <br>The default value is `5.0`.
-          default: 5.0
+            Set the exact Kelvin change for one 12-degree pressed-rotation tick.
+            <br>For example, `60` means `60 K` per tick and a 60-degree packet changes color temperature by `300 K`.
+            <br>The default value is `60 K` per tick.
+          default: 60
           selector:
             number:
               min: 1
-              max: 20
-              step: 0.1
-              unit_of_measurement: num
-              mode: slider
+              max: 10000
+              step: 1
+              unit_of_measurement: "K/tick"
+              mode: box
 
         color_temp_min:
           name: Min Color Temp Kelvin
@@ -329,8 +337,8 @@ action:
       TARGET_LIGHT: !input target_light
       KNOB_MIN_BRIGHT_PCT: !input knob_control_min_brightness
       KNOB_MAX_BRIGHT_PCT: !input knob_control_max_brightness
-      BRIGHTNESS_STEPSIZE: !input brightness_stepsize
-      TEMP_STEPSIZE: !input color_temp_stepsize
+      BRIGHTNESS_STEP_PCT: !input brightness_stepsize
+      COLOR_TEMP_STEP_K: !input color_temp_stepsize
       RESTORE_BRIGHTNESS: !input restore_brightness
       TEMP_BASE: !input color_temp_base
       TEMP_MIN: !input color_temp_min
@@ -415,11 +423,16 @@ action:
             ROTATION_DELTA | float(0) != 0 }}
         sequence:
           - variables:
-              BRIGHTNESS_DELTA: >-
-                {{ (((ROTATION_DELTA | float(0) / 3.6 / 3) *
-                  BRIGHTNESS_STEPSIZE * 2.54) | round(0)) }}
+              ROTATION_TICKS: >-
+                {{ ROTATION_DELTA | float(0) / 12 }}
+
+          - variables:
+              BRIGHTNESS_DELTA_PCT: >-
+                {{ (ROTATION_TICKS | float(0)) *
+                  (BRIGHTNESS_STEP_PCT | float(0)) }}
               COLOR_TEMP_DELTA_K: >-
-                {{ ROTATION_DELTA | float(0) * TEMP_STEPSIZE }}
+                {{ (ROTATION_TICKS | float(0)) *
+                  (COLOR_TEMP_STEP_K | float(0)) }}
 
           - choose:
               - conditions: "{{ BUTTON_STATE == 'released' }}"
@@ -428,7 +441,8 @@ action:
                       - condition: template
                         value_template: >-
                           {{ states(TARGET_LIGHT) == 'off' and
-                            RESTORE_BRIGHTNESS and BRIGHTNESS_DELTA > 0 }}
+                            RESTORE_BRIGHTNESS and
+                            BRIGHTNESS_DELTA_PCT | float(0) > 0 }}
                     then:
                       - action: light.turn_on
                         target:
@@ -440,12 +454,10 @@ action:
                           CURRENT_PCT: >-
                             {{ (state_attr(TARGET_LIGHT, 'brightness') |
                               float(0) / 255 * 100) | round(0) }}
-                          STEP_PCT: >-
-                            {{ (BRIGHTNESS_DELTA | float(0) /
-                              255 * 100) | round(1) }}
                           PROPOSED_PCT: >-
-                            {{ (CURRENT_PCT | float(0) +
-                              STEP_PCT | float(0)) | round(0) }}
+                            {{ ((CURRENT_PCT | float(0)) +
+                              (BRIGHTNESS_DELTA_PCT | float(0))) |
+                              round(0) }}
                           CLAMPED_PCT: >-
                             {{ min(KNOB_MAX_BRIGHT_PCT | int,
                               max(KNOB_MIN_BRIGHT_PCT | int,
@@ -470,7 +482,7 @@ action:
                       - condition: template
                         value_template: >-
                           {{ states(TARGET_LIGHT) == 'off' and
-                            COLOR_TEMP_DELTA_K > 0 }}
+                            COLOR_TEMP_DELTA_K | float(0) > 0 }}
                     then:
                       - action: light.turn_on
                         target:

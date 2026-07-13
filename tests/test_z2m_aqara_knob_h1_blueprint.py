@@ -341,11 +341,11 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertNotIn("action_rotation_angle_speed", source)
         self.assertEqual(
             source.count("state_attr(TARGET_LIGHT, 'brightness')"),
-            4,
+            3,
         )
         self.assertEqual(
             source.count("state_attr(TARGET_LIGHT, 'color_temp_kelvin')"),
-            2,
+            3,
         )
         self.assertNotIn("/ 3.6 / 3", source)
         self.assertNotIn("2.54", source)
@@ -435,6 +435,39 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertIn("alias: Wait for restored color temperature state", source)
         self.assertIn("alias: Refresh restored color temperature base", source)
         self.assertGreaterEqual(source.count("continue_on_timeout: true"), 4)
+
+    def test_pressed_startup_waits_for_reported_color_base_before_remaining_ticks(self):
+        gesture = RotationGestureModel(
+            base_color_temp_k=4000,
+            light_is_off=True,
+            restored_color_temp_k=3500,
+        )
+        for angle in (12, 24, 36):
+            gesture.listener_capture(angle, "pressed")
+
+        gesture.worker_apply_latest()
+        gesture.worker_apply_latest()
+
+        self.assertEqual(gesture.startup_commands, [(12, "pressed")])
+        self.assertEqual(gesture.base_color_temp_k, 3500)
+        self.assertEqual(gesture.color_temp_commands, [3620])
+
+        source = load_source()
+        wait_start = source.index(
+            "alias: Wait for restored color temperature state"
+        )
+        refresh_start = source.index(
+            "alias: Refresh restored color temperature base"
+        )
+        color_wait = source[wait_start:refresh_start]
+        self.assertIn(
+            "state_attr(TARGET_LIGHT, 'color_temp_kelvin')",
+            color_wait,
+        )
+        self.assertNotIn(
+            "state_attr(TARGET_LIGHT, 'brightness')",
+            color_wait,
+        )
 
     def test_coalesced_pressed_startup_consumes_only_startup_angle(self):
         gesture = RotationGestureModel(

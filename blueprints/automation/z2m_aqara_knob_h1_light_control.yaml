@@ -734,7 +734,7 @@ action:
                                         - alias: Wait for restored color temperature state
                                           wait_template: >-
                                             {{ is_state(TARGET_LIGHT, 'on') and
-                                              state_attr(TARGET_LIGHT, 'brightness')
+                                              state_attr(TARGET_LIGHT, 'color_temp_kelvin')
                                                 is number }}
                                           timeout:
                                             seconds: 2

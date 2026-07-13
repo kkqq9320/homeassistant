@@ -29,9 +29,11 @@ is superseded by gesture-level cumulative processing:
   `stop_rotating`, captures the newest cumulative angle and button state, and ends
   on a different action or bounded inactivity timeout. Intermediate packets may be
   coalesced, reducing top-level traces without losing movement.
-- Snapshot base brightness and color temperature once at gesture start. Every
-  command is an absolute target computed from that base plus the cumulative signed
-  angle. Never rebase from an entity state that may still reflect an earlier command.
+- Snapshot base brightness and color temperature once at gesture start for an
+  already-on light. After an off-light startup, refresh only the applicable base once
+  from the bounded restored-state wait. Every later command is an absolute target
+  computed from that base plus the cumulative signed angle; never rebase from a state
+  that may still reflect an earlier command.
 - Capture cumulative angle and button state from both `rotation` and
   `stop_rotating` before completing the listener. A missing stop field preserves its
   previous value, and worker freshness compares the complete angle/button signature.
@@ -109,8 +111,8 @@ color_temp_target = base_color_temp_k + rotation_ticks * color_temp_k_per_tick
 ```
 
 Brightness and color temperature apply those absolute targets with the existing
-rounding and configured min/max clamps. The base values are captured once at
-gesture start; later commands do not reread brightness or color temperature. If a
+rounding and configured min/max clamps. For an already-on light, the base values are
+captured once at gesture start and later commands do not reread them. If a
 restore-only positive startup packet is consumed, the worker waits up to two seconds
 for the light's reported state and refreshes the applicable base once. Its cumulative
 angle becomes the gesture offset so later movement starts from that restored base

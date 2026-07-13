@@ -4,9 +4,9 @@
 
 **Goal:** Make the Aqara H1 Blueprint consume atomic Zigbee2MQTT JSON events, serialize each rotation, and support configurable Hold repetition plus Release actions.
 
-**Architecture:** Filter the device-state topic into one top-level run per high-level gesture. A rotation run owns a `wait_for_trigger` loop and applies cumulative-angle differences sequentially; Hold repetition uses a separate bounded wait loop while `parallel` mode lets Release respond immediately.
+**Architecture:** Queue every actionable device-state packet at arrival. Apply the packet-local `action_rotation_angle_speed` increment in one run at a time; Hold repetition uses a bounded wait loop that hands control to the queued next action.
 
-**Tech Stack:** Home Assistant Blueprint YAML, MQTT triggers, Jinja templates, Python standard-library `unittest`, PyYAML supplied by the validation environment.
+**Tech Stack:** Home Assistant Blueprint YAML, MQTT triggers, Jinja templates, Python standard-library `unittest`; PyYAML and Jinja supplied only by the validation environment.
 
 ## Global Constraints
 
@@ -14,8 +14,8 @@
 - Add no Home Assistant helpers and no runtime dependencies.
 - Preserve existing control inputs and effective brightness/color-temperature step formulas.
 - Keep `translate_friendly_name` as a deprecated compatibility input but do not use it.
-- Rotation inactivity timeout is exactly 2 seconds.
 - Hold repeat maximum defaults to exactly 60 seconds.
+- Allow 1000 queued runs and warn on overflow rather than silently dropping packets.
 
 ---
 
@@ -26,18 +26,18 @@
 - Test: `blueprints/automation/z2m_aqara_knob_h1_light_control.yaml`
 
 **Interfaces:**
-- Consumes: captured Zigbee2MQTT fields `action`, `action_rotation_angle`, and `action_rotation_button_state`.
-- Produces: executable checks for root-topic filtering, serialized rotation deltas, Hold modes, Release, and timeouts.
+- Consumes: captured Zigbee2MQTT fields `action`, `action_rotation_angle`, `action_rotation_angle_speed`, and `action_rotation_button_state`.
+- Produces: executable checks for root-topic filtering, queued processing, packet-local rotation deltas, Hold modes, Release, and deadlines.
 
 - [ ] **Step 1: Write the failing test**
 
-  Define a PyYAML loader for `!input`, load the Blueprint, then assert:
-  - top-level trigger payloads are `single`, `double`, `hold`, `release`, and `start_rotating`;
-  - all trigger topics are the root device topic and use `value_json.action`;
+  Read the Blueprint with the standard library, then assert:
+  - one root-topic trigger accepts all seven actionable messages through `value_json.action`;
+  - automation mode is `queued` and Core 2024.08-compatible `platform: mqtt` syntax is used;
   - no `states(SENSOR_...)` or derived sensor entity IDs remain;
   - inputs include `action_release`, `hold_repeat_mode`, `action_hold_repeat`, `hold_repeat_interval`, and `hold_repeat_max_duration`;
-  - the action text contains `wait.trigger.payload_json`, the exact two-second rotation timeout, and cumulative-angle subtraction;
-  - captured angles produce right deltas `[108, 312, 168, 0]`, left deltas `[-12, -12, 0]`, and pressed deltas `[24, 84, 108, 48, 84, 12, 0]`.
+  - the action reads `action_rotation_angle_speed` from the same trigger payload without previous-angle state;
+  - captured `action_rotation_angle_speed` values equal the right deltas `[108, 312, 168, 0]`, left deltas `[-12, -12, 0]`, and pressed deltas `[24, 84, 108, 48, 84, 12, 0]`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -66,19 +66,19 @@
 
   Mark `translate_friendly_name` deprecated, remove sensor-entity prerequisites, document atomic MQTT JSON processing, and add the five Hold/Release inputs covered by Task 1.
 
-- [ ] **Step 2: Filter top-level triggers**
+- [x] **Step 2: Filter top-level triggers**
 
-  Add one MQTT trigger per high-level action with:
+  Add one MQTT trigger for the root device topic with:
   ```yaml
   topic: "{{ base_topic }}/{{ knob }}"
   value_template: "{{ value_json.action | default('') }}"
-  payload: <action>
-  id: <action>
+  payload: action
+  value_template: "{{ 'action' if value_json.action in [...] else 'ignore' }}"
   ```
 
-- [ ] **Step 3: Implement sequential rotation processing**
+- [x] **Step 3: Implement sequential rotation processing**
 
-  On `start_rotating`, initialize `PREVIOUS_ANGLE` to zero and repeat: calculate `DELTA_ANGLE`, run the existing brightness or color-temperature branch, update `PREVIOUS_ANGLE`, then wait up to two seconds for the next device-state packet. Process `rotation` and the final `stop_rotating`; stop on timeout or any other action.
+  Set `mode: queued`. For each `start_rotating` or `rotation` packet, read `action_rotation_angle_speed` and `action_rotation_button_state` from `trigger.payload_json`, then run the existing brightness or color-temperature branch with that packet-local delta. Ignore the zero-delta `stop_rotating` packet.
 
 - [ ] **Step 4: Implement Hold modes and Release**
 

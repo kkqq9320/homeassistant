@@ -16,6 +16,21 @@ def load_source():
     return BLUEPRINT_PATH.read_text(encoding="utf-8")
 
 
+def compact_whitespace(value):
+    return " ".join(value.split())
+
+
+def extract_input_block(source, input_name, next_input_name):
+    match = re.search(
+        rf"(?ms)^        {re.escape(input_name)}:\n.*?"
+        rf"(?=^        {re.escape(next_input_name)}:\n)",
+        source,
+    )
+    if match is None:
+        raise AssertionError(f"Could not find input block: {input_name}")
+    return match.group(0)
+
+
 class AqaraKnobBlueprintTest(unittest.TestCase):
     def test_uses_one_root_topic_trigger_for_every_action_message(self):
         source = load_source()
@@ -26,6 +41,84 @@ class AqaraKnobBlueprintTest(unittest.TestCase):
         self.assertIn('topic: "{{ base_topic }}/{{ knob }}"', source)
         self.assertNotIn('/{{ knob }}/action', source)
         self.assertIn("value_json.action", source)
+        self.assertNotIn('topic: "{{ base_topic }}/+"', source)
+        self.assertNotIn('topic: "{{ base_topic }}/#"', source)
+
+    def test_exposes_direct_per_tick_inputs(self):
+        source = load_source()
+        brightness = extract_input_block(
+            source, "brightness_stepsize", "color_temp_stepsize"
+        )
+        color_temp = extract_input_block(
+            source, "color_temp_stepsize", "color_temp_min"
+        )
+
+        self.assertIn("name: Brightness per Tick", brightness)
+        self.assertRegex(brightness, r"(?m)^          default: 4$")
+        self.assertRegex(brightness, r"(?m)^              min: 1$")
+        self.assertRegex(brightness, r"(?m)^              max: 10$")
+        self.assertIn('unit_of_measurement: "%/tick"', brightness)
+
+        self.assertIn("name: Color Temperature per Tick", color_temp)
+        self.assertRegex(color_temp, r"(?m)^          default: 60$")
+        self.assertRegex(color_temp, r"(?m)^              min: 1$")
+        self.assertRegex(color_temp, r"(?m)^              max: 10000$")
+        self.assertIn('unit_of_measurement: "K/tick"', color_temp)
+
+    def test_documents_the_per_tick_breaking_change(self):
+        source = load_source()
+
+        self.assertIn("## Breaking Change: Direct Per-Tick Controls", source)
+        self.assertIn("One knob tick is `12 degrees`", source)
+        self.assertIn("open every automation created from it", source)
+        self.assertIn("review these two inputs, and save it again", source)
+        self.assertIn("`5` to `60 K/tick`", source)
+
+    def test_uses_direct_signed_per_tick_deltas(self):
+        source = load_source()
+        compact = compact_whitespace(source)
+
+        self.assertIn(
+            "ROTATION_TICKS: >- {{ ROTATION_DELTA | float(0) / 12 }}",
+            compact,
+        )
+        self.assertIn(
+            "BRIGHTNESS_DELTA_PCT: >- {{ (ROTATION_TICKS | float(0)) * "
+            "(BRIGHTNESS_STEP_PCT | float(0)) }}",
+            compact,
+        )
+        self.assertIn(
+            "COLOR_TEMP_DELTA_K: >- {{ (ROTATION_TICKS | float(0)) * "
+            "(COLOR_TEMP_STEP_K | float(0)) }}",
+            compact,
+        )
+        self.assertNotIn("/ 3.6 / 3", source)
+        self.assertNotIn("2.54", source)
+        self.assertNotRegex(source, r"(?m)^\s+BRIGHTNESS_DELTA:$")
+        self.assertNotRegex(source, r"(?m)^\s+STEP_PCT:$")
+
+    def test_blueprint_maps_packet_angles_to_per_tick_examples(self):
+        source = load_source()
+        tick_divisor = re.search(
+            r"ROTATION_TICKS: >-\s+"
+            r"{{ ROTATION_DELTA \| float\(0\) / (?P<degrees>\d+) }}",
+            source,
+        )
+        self.assertIsNotNone(tick_divisor)
+        degrees_per_tick = float(tick_divisor.group("degrees"))
+        examples = (
+            (12, 1, 1, 60),
+            (60, 5, 5, 300),
+            (-24, -2, -2, -120),
+            (84, 7, 7, 420),
+        )
+
+        for angle_speed, ticks, brightness_pct, color_temp_k in examples:
+            with self.subTest(angle_speed=angle_speed):
+                calculated_ticks = angle_speed / degrees_per_tick
+                self.assertEqual(calculated_ticks, ticks)
+                self.assertEqual(calculated_ticks * 1, brightness_pct)
+                self.assertEqual(calculated_ticks * 60, color_temp_k)
 
     def test_mqtt_value_templates_do_not_reference_trigger_variables(self):
         source = load_source()

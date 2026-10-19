@@ -1,0 +1,140 @@
+blueprint:
+  name: Zigbee2MQTT IKEA E1744 조명 제어
+  description: >-
+    IKEA SYMFONISK 1세대 회전 노브(E1744)로 밝기, 색온도, 색상 또는 채도를 조절합니다.
+    클릭 1·2·3회 동작은 직접 지정합니다.
+    [설정 안내](https://github.com/kkqq9320/homeassistant/blob/main/blueprints/automation/z2m_ikea_e1744_light_control/README.md)
+  domain: automation
+  source_url: https://github.com/kkqq9320/homeassistant/blob/main/blueprints/automation/z2m_ikea_e1744_light_control.yaml
+  homeassistant:
+    min_version: "2025.4.0"
+  input:
+    connection:
+      name: 연결
+      input:
+        base_topic:
+          name: Zigbee2MQTT 기본 topic
+          default: zigbee2mqtt
+          selector:
+            text: {}
+        knob:
+          name: Zigbee2MQTT 노브 이름
+          description: Zigbee2MQTT의 friendly_name을 공백과 대소문자까지 그대로 입력합니다.
+          selector:
+            text: {}
+        target_light:
+          name: 대상 조명
+          description: 여러 조명을 조절하려면 하나의 조명 그룹을 선택합니다.
+          selector:
+            entity:
+              filter:
+                - domain: light
+              multiple: false
+    rotation:
+      name: 회전 기능
+      input:
+        rotation_mode:
+          name: 조절할 기능
+          default: brightness
+          selector:
+            select:
+              options:
+                - value: brightness
+                  label: 조명 밝기
+                - value: color_temperature
+                  label: 조명 색온도
+                - value: light_hue
+                  label: Light Hue — 색상
+                - value: light_saturation
+                  label: Light Saturation — 채도
+        restore_brightness:
+          name: 꺼진 조명을 켤 때 밝기 복원
+          description: >-
+            밝기 기능에서 오른쪽으로 돌릴 때 적용합니다. 켜면 조명이 복원한 밝기부터
+            조절하고, 끄면 0%를 기준으로 밝아집니다. 색온도·색상·채도는 복원 밝기를 유지합니다.
+          default: false
+          selector:
+            boolean: {}
+    tuning:
+      name: 조절량과 반복
+      description: 조절량은 물리적인 한 칸이 아닌 반복 한 번의 변화량입니다.
+      collapsed: true
+      input:
+        brightness_step_pct:
+          name: 밝기 변화량
+          default: 2
+          selector:
+            number: {min: 1, max: 100, step: 1, unit_of_measurement: "%p", mode: box}
+        color_temp_step_kelvin:
+          name: 색온도 변화량
+          default: 100
+          selector:
+            number: {min: 1, max: 10000, step: 1, unit_of_measurement: K, mode: box}
+        hue_step_percent:
+          name: 색상환 이동 비율
+          description: 2%는 색상환에서 7.2°입니다.
+          default: 2
+          selector:
+            number: {min: 1, max: 100, step: 1, unit_of_measurement: "%", mode: box}
+        saturation_step_pct:
+          name: 채도 변화량
+          default: 2
+          selector:
+            number: {min: 1, max: 100, step: 1, unit_of_measurement: "%p", mode: box}
+        repeat_interval_ms:
+          name: 반복 간격
+          description: 명령 처리가 끝난 뒤 다음 조절까지 기다리는 시간입니다.
+          default: 200
+          selector:
+            number: {min: 100, max: 2000, step: 10, unit_of_measurement: ms, mode: box}
+        max_rotation_seconds:
+          name: 최대 반복 시간
+          description: 정지 신호가 누락되어도 이 시간이 지나면 새 반복을 시작하지 않습니다.
+          default: 10
+          selector:
+            number: {min: 1, max: 30, step: 1, unit_of_measurement: s, mode: box}
+    clicks:
+      name: 클릭 동작
+      input:
+        action_click_short:
+          name: 한 번 클릭
+          default: []
+          selector:
+            action: {}
+        action_click_double:
+          name: 두 번 클릭
+          default: []
+          selector:
+            action: {}
+        action_click_triple:
+          name: 세 번 클릭
+          default: []
+          selector:
+            action: {}
+
+mode: restart
+trigger_variables:
+  base_topic: !input base_topic
+  knob: !input knob
+triggers:
+  - trigger: mqtt
+    topic: "{{ base_topic }}/{{ knob }}"
+    payload: accepted
+    value_template: >-
+      {{ 'accepted' if value_json is mapping and value_json.action is defined
+         and value_json.action is string and value_json.action in
+         ['toggle', 'brightness_step_up', 'brightness_step_down',
+          'brightness_move_up', 'brightness_move_down', 'brightness_stop']
+         else 'ignored' }}
+actions:
+  - variables:
+      knob_action: "{{ trigger.payload_json.action }}"
+  - choose:
+      - conditions: "{{ knob_action == 'toggle' }}"
+        sequence: !input action_click_short
+      - conditions: "{{ knob_action == 'brightness_step_up' }}"
+        sequence: !input action_click_double
+      - conditions: "{{ knob_action == 'brightness_step_down' }}"
+        sequence: !input action_click_triple
+    default:
+      - stop: 회전 또는 정지 동작 종료

@@ -110,7 +110,7 @@ MQTT 대역은 `homeassistant.components.mqtt.trigger.async_subscribe_internal`�
 `label`을 `click_calls`에 추가한다. 각 시험 종료 때 자동화·HA·패치·임시 폴더를 정리한다.
 진행 중인 반복을 모두 기다리는 전역 drain 대신 필요한 호출 수와 명시적 사건을 기다린다.
 
-## 작업 1: MQTT와 클릭이 실제 HA에서 실행되는 블루프린트
+## Task 1: MQTT와 클릭이 실제 HA에서 실행되는 블루프린트
 
 **Files:** 위 표의 최초 작업 1 파일을 생성한다.
 
@@ -151,7 +151,7 @@ async def test_click_mapping_and_repeated_click(self):
   YAML·블루프린트·확장 자동화 검증 오류가 없는지 확인한다.
 - [ ] **커밋:** `feat: IKEA E1744 MQTT 입력과 클릭 동작 추가`.
 
-## 작업 2: 켜진 조명의 네 가지 반복 조절
+## Task 2: 켜진 조명의 네 가지 반복 조절
 
 **Files:** 제품 YAML을 수정하고 `tests/test_ikea_modes.py`를 생성한다.
 
@@ -194,7 +194,7 @@ async def test_delayed_state_does_not_reset_targets(self):
   갱신으로 42→44→46이 나오는지 확인하며, 별도 Python 계산 모델로 대체하지 않는다.
 - [ ] **커밋:** `feat: IKEA 노브의 밝기 색온도 색상 채도 조절 추가`.
 
-## 작업 3: 꺼진 조명의 시작 방향과 밝기 선택
+## Task 3: 꺼진 조명의 시작 방향과 밝기 선택
 
 **Files:** 제품 YAML을 수정하고 `tests/test_ikea_startup.py`를 생성한다.
 
@@ -232,7 +232,7 @@ async def test_zero_start_has_no_bare_turn_on(self):
   명령을 되돌리지는 않지만 추가 조절을 막는지 확인한다.
 - [ ] **커밋:** `feat: IKEA 회전으로 조명 켜기와 시작 밝기 선택 추가`.
 
-## 작업 4: 반복 수명과 오류 경계
+## Task 4: 반복 수명과 오류 경계
 
 **Files:** 제품 YAML을 수정하고 `tests/test_ikea_lifecycle.py`를 생성한다.
 
@@ -283,7 +283,7 @@ async def test_stop_during_service_prevents_later_calls(self):
   정확한 밀리초 단위 실행 시각을 요구하지 않는다.
 - [ ] **커밋:** `fix: IKEA 회전 중단과 상태 오류 경계 검증`.
 
-## 작업 5: 사용 가이드·최종 검증·GitHub 게시
+## Task 5: 사용 가이드·최종 검증·GitHub 게시
 
 **Files:** 전용 가이드와 시험 보고서를 생성하고 루트 README 및 계약 시험을 수정한다.
 

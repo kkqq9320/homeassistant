@@ -126,7 +126,14 @@ triggers:
          ['toggle', 'brightness_step_up', 'brightness_step_down',
           'brightness_move_up', 'brightness_move_down', 'brightness_stop']
          else 'ignored' }}
+  # HA는 설정이 같은 자동화를 다시 불러올 때 실행을 유지한다.
+  - trigger: event
+    event_type: automation_reloaded
+    id: automation_reload
 actions:
+  - if: "{{ trigger.id == 'automation_reload' }}"
+    then:
+      - stop: 자동화 다시 불러오기로 실행 중단
   - variables:
       knob_action: "{{ trigger.payload_json.action }}"
   - choose:

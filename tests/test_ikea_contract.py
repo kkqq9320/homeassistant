@@ -1,9 +1,31 @@
 import asyncio
+import re
+from urllib.parse import parse_qs, unquote, urlparse
 
-from tests.ikea_runtime import BLUEPRINT, IkeaBlueprintCase
+from tests.ikea_runtime import BLUEPRINT, ROOT, IkeaBlueprintCase
 
 
 class IkeaContractTest(IkeaBlueprintCase):
+    async def test_document_links_and_source_url(self):
+        guide_relative = "blueprints/automation/z2m_ikea_e1744_light_control/README.md"
+        guide = ROOT / guide_relative
+        self.assertTrue(guide.is_file(), "IKEA 전용 가이드가 필요합니다")
+        await self.load()
+        source_url = self.blueprint.data["blueprint"]["source_url"]
+        self.assertEqual(source_url, "https://github.com/kkqq9320/homeassistant/blob/main/"
+                                    "blueprints/automation/z2m_ikea_e1744_light_control.yaml")
+        root_readme = ROOT / "README.md"
+        self.assertIn(f"]({guide_relative})", root_readme.read_text(encoding="utf-8"))
+        for document in (guide, root_readme):
+            links = re.findall(r"\]\(([^)]+)\)", document.read_text(encoding="utf-8"))
+            imports = [parse_qs(urlparse(link).query)["blueprint_url"][0]
+                       for link in links if "blueprint_import/?blueprint_url=" in link]
+            self.assertIn(source_url, imports)
+            for link in links:
+                parsed = urlparse(link)
+                if not parsed.scheme and parsed.path:
+                    self.assertTrue((document.parent / unquote(parsed.path)).exists(), link)
+
     async def test_blueprint_loads_with_required_inputs_and_defaults(self):
         self.assertTrue(BLUEPRINT.is_file(), "IKEA 블루프린트 파일이 필요합니다")
         await self.load()

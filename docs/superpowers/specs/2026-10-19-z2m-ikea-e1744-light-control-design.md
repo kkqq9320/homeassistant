@@ -25,7 +25,7 @@ MQTT 트리거가 알려진 동작을 걸러서 받아 `choose`로 클릭과 회
 - 배터리 보고처럼 동작이 없는 메시지는 트리거 단계에서 제외한다.
 - 자동화 하나가 한 노브와 한 조명 또는 조명 그룹을 담당한다.
 
-[Tap Dial Engine](https://github.com/kkqq9320/homeassistant/blob/main/blueprints/automation/z2m_philips_hue_tap_dial_engine.yaml)의
+HA에 설치된 `z2m_philips_hue_tap_dial_engine.yaml`의
 색상·채도 계산 규칙을 따른다. 해당 Engine의 버튼 프로필, Worker, 영구 세션 저장은
 E1744의 고정 회전 기능에 필요하지 않아 도입하지 않는다.
 
@@ -263,5 +263,5 @@ HA에서 가져오기, 실제 대상 선택, 클릭 동작 설정은 설치 단�
 - [Zigbee2MQTT E1744 문서](https://www.zigbee2mqtt.io/devices/E1744.html): 지원 동작과 기기 모델.
 - [EPMatt E1744 컨트롤러](https://github.com/EPMatt/awesome-ha-blueprints/blob/main/blueprints/controllers/ikea_e1744/ikea_e1744.yaml): 클릭·회전 매핑과 `restart` 실행 방식. 설치된 사본도 대조했다.
 - [Aqara Knob 블루프린트](../../../blueprints/automation/z2m_aqara_knob_h1_light_control.yaml): MQTT JSON 직접 수신과 `restore_brightness`의 두 시작 방식, 켠 뒤 보고된 밝기를 기준으로 조절하는 흐름.
-- [Tap Dial Engine](https://github.com/kkqq9320/homeassistant/blob/main/blueprints/automation/z2m_philips_hue_tap_dial_engine.yaml) 및 [Worker](https://github.com/kkqq9320/homeassistant/blob/main/blueprints/script/z2m_philips_hue_tap_dial_worker.yaml): 설치된 사본의 Hue 순환, Saturation 제한, `hs_color` 명령을 확인했다.
+- HA에 설치된 `z2m_philips_hue_tap_dial_engine.yaml`과 `z2m_philips_hue_tap_dial_worker.yaml`: 2026-10-19 설치 사본에서 Hue 순환, Saturation 제한, `hs_color` 명령을 확인했다.
 - [HA `light.turn_on`](https://www.home-assistant.io/actions/light.turn_on/): 밝기, Kelvin 색온도, HS 색상 필드.

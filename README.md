@@ -87,5 +87,12 @@ Knob H1 connected through Zigbee2MQTT.
 
 [![Import this Blueprint into Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fkkqq9320%2Fhomeassistant%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fz2m_aqara_knob_h1_light_control.yaml)
 
+## [IKEA E1744 조명 제어](blueprints/automation/z2m_ikea_e1744_light_control/README.md)
+
+Zigbee2MQTT의 SYMFONISK 1세대 회전 노브로 밝기·색온도·색상·채도 중 하나를
+조절한다. 꺼진 조명의 시작 밝기와 1·2·3회 클릭 동작을 직접 설정할 수 있다.
+
+[![Home Assistant에 블루프린트 가져오기](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fkkqq9320%2Fhomeassistant%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fz2m_ikea_e1744_light_control.yaml)
+
 ## synchronize_two_entities.yaml
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fkkqq9320%2Fhomeassistant%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsynchronize_two_entities)

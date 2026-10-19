@@ -142,6 +142,7 @@ actions:
   - variables:
       target_light: !input target_light
       rotation_mode: !input rotation_mode
+      restore_brightness: !input restore_brightness
       brightness_step_pct: !input brightness_step_pct
       color_temp_step_kelvin: !input color_temp_step_kelvin
       hue_step_percent: !input hue_step_percent
@@ -161,9 +162,59 @@ actions:
   - if: "{{ not supported }}"
     then:
       - stop: 선택한 조명 기능을 지원하지 않음
-  - if: "{{ not is_state(target_light, 'on') }}"
+  - if: "{{ states(target_light) not in ['on', 'off'] }}"
     then:
-      - stop: 켜진 조명 상태가 아님
+      - stop: 조명 상태를 사용할 수 없음
+  - variables:
+      started_off: "{{ is_state(target_light, 'off') }}"
+      zero_start: "{{ started_off and rotation_mode == 'brightness' and not restore_brightness }}"
+  - if: "{{ started_off and rotation_mode == 'brightness' and direction == -1 }}"
+    then:
+      - stop: 꺼진 조명의 밝기 감소는 켜지 않음
+  - if: "{{ started_off }}"
+    then:
+      - choose:
+          - conditions: "{{ zero_start }}"
+            sequence:
+              - action: light.turn_on
+                target:
+                  entity_id: "{{ target_light }}"
+                data:
+                  brightness_pct: "{{ brightness_step_pct }}"
+        default:
+          - action: light.turn_on
+            target:
+              entity_id: "{{ target_light }}"
+      - if: "{{ as_timestamp(now()) >= deadline }}"
+        then:
+          - stop: 조명 켜기 중 최대 반복 시간 도달
+      # 켜짐 대기와 시작 값 검증에 같은 조건을 사용한다.
+      - wait_template: &usable_light >-
+          {% set b = state_attr(target_light, 'brightness') %}
+          {% set k = state_attr(target_light, 'color_temp_kelvin') %}
+          {% set lo = state_attr(target_light, 'min_color_temp_kelvin') %}
+          {% set hi = state_attr(target_light, 'max_color_temp_kelvin') %}
+          {% set hs = state_attr(target_light, 'hs_color') %}
+          {% set h = hs[0] if hs is sequence and hs is not string and hs is not mapping and hs | count > 0 else none %}
+          {% set s = hs[1] if hs is sequence and hs is not string and hs is not mapping and hs | count > 1 else none %}
+          {% if not is_state(target_light, 'on') %}{{ false }}
+          {% elif zero_start %}{{ true }}
+          {% elif rotation_mode == 'brightness' %}
+            {{ b is number and b is not boolean and is_number(b) and 0 <= b <= 255 }}
+          {% elif rotation_mode == 'color_temperature' %}
+            {{ k is number and k is not boolean and is_number(k) and k > 0
+               and lo is number and lo is not boolean and is_number(lo)
+               and hi is number and hi is not boolean and is_number(hi) and 0 < lo <= hi }}
+          {% else %}
+            {{ h is number and h is not boolean and is_number(h) and 0 <= h <= 360
+               and s is not boolean and (s is not number or (is_number(s) and 0 <= s <= 100)) }}
+          {% endif %}
+        timeout:
+          seconds: "{{ [2, [deadline - as_timestamp(now()), 0] | max] | min }}"
+        continue_on_timeout: true
+      - if: "{{ not wait.completed }}"
+        then:
+          - stop: 조명 켜짐 또는 유효한 속성 보고 대기 시간 초과
   - variables:
       brightness: "{{ state_attr(target_light, 'brightness') }}"
       kelvin: "{{ state_attr(target_light, 'color_temp_kelvin') }}"
@@ -174,20 +225,7 @@ actions:
         {{ hs[0] if hs is sequence and hs is not string and hs is not mapping and hs | count > 0 else none }}
       held_saturation: >-
         {{ hs[1] if hs is sequence and hs is not string and hs is not mapping and hs | count > 1 else none }}
-      valid_value: >-
-        {% if rotation_mode == 'brightness' %}
-          {{ brightness is number and brightness is not boolean and is_number(brightness)
-             and 0 <= brightness <= 255 }}
-        {% elif rotation_mode == 'color_temperature' %}
-          {{ kelvin is number and kelvin is not boolean and is_number(kelvin) and kelvin > 0
-             and min_kelvin is number and min_kelvin is not boolean and is_number(min_kelvin)
-             and max_kelvin is number and max_kelvin is not boolean and is_number(max_kelvin)
-             and 0 < min_kelvin <= max_kelvin }}
-        {% else %}
-          {{ held_hue is number and held_hue is not boolean and is_number(held_hue) and 0 <= held_hue <= 360
-             and held_saturation is not boolean
-             and (held_saturation is not number or (is_number(held_saturation) and 0 <= held_saturation <= 100)) }}
-        {% endif %}
+      valid_value: *usable_light
   - if: "{{ not valid_value }}"
     then:
       - stop: 조절에 필요한 조명 속성이 유효하지 않음
@@ -195,10 +233,15 @@ actions:
       held_hue: "{{ (held_hue % 360) | round(3) if held_hue is number else 0 }}"
       held_saturation: "{{ held_saturation | round(3) if held_saturation is number else 50 }}"
       target_value: >-
-        {% if rotation_mode == 'brightness' %}{{ (brightness / 255 * 100) | round(3) }}
+        {% if zero_start %}{{ brightness_step_pct }}
+        {% elif rotation_mode == 'brightness' %}{{ (brightness / 255 * 100) | round(3) }}
         {% elif rotation_mode == 'color_temperature' %}{{ kelvin }}
         {% elif rotation_mode == 'light_hue' %}{{ held_hue }}
         {% else %}{{ held_saturation }}{% endif %}
+  - if: "{{ started_off }}"
+    then:
+      - delay:
+          seconds: "{{ [repeat_interval_ms / 1000, [deadline - as_timestamp(now()), 0] | max] | min }}"
   - repeat:
       while: "{{ is_state(target_light, 'on') and as_timestamp(now()) < deadline }}"
       sequence:

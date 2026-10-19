@@ -136,5 +136,111 @@ actions:
         sequence: !input action_click_double
       - conditions: "{{ knob_action == 'brightness_step_down' }}"
         sequence: !input action_click_triple
-    default:
-      - stop: 회전 또는 정지 동작 종료
+  - if: "{{ knob_action not in ['brightness_move_up', 'brightness_move_down'] }}"
+    then:
+      - stop: 클릭 또는 정지 동작 종료
+  - variables:
+      target_light: !input target_light
+      rotation_mode: !input rotation_mode
+      brightness_step_pct: !input brightness_step_pct
+      color_temp_step_kelvin: !input color_temp_step_kelvin
+      hue_step_percent: !input hue_step_percent
+      saturation_step_pct: !input saturation_step_pct
+      repeat_interval_ms: !input repeat_interval_ms
+      max_rotation_seconds: !input max_rotation_seconds
+      direction: "{{ 1 if knob_action == 'brightness_move_up' else -1 }}"
+      deadline: "{{ as_timestamp(now()) + max_rotation_seconds }}"
+      supported_modes: "{{ state_attr(target_light, 'supported_color_modes') or [] }}"
+      supported: >-
+        {{ supported_modes is sequence and supported_modes is not string and
+           ((rotation_mode == 'brightness' and
+             supported_modes | select('in', ['brightness', 'color_temp', 'hs', 'xy', 'rgb', 'rgbw', 'rgbww', 'white']) | list | count > 0)
+            or (rotation_mode == 'color_temperature' and 'color_temp' in supported_modes)
+            or (rotation_mode in ['light_hue', 'light_saturation'] and
+                supported_modes | select('in', ['hs', 'xy', 'rgb', 'rgbw', 'rgbww']) | list | count > 0)) }}
+  - if: "{{ not supported }}"
+    then:
+      - stop: 선택한 조명 기능을 지원하지 않음
+  - if: "{{ not is_state(target_light, 'on') }}"
+    then:
+      - stop: 켜진 조명 상태가 아님
+  - variables:
+      brightness: "{{ state_attr(target_light, 'brightness') }}"
+      kelvin: "{{ state_attr(target_light, 'color_temp_kelvin') }}"
+      min_kelvin: "{{ state_attr(target_light, 'min_color_temp_kelvin') }}"
+      max_kelvin: "{{ state_attr(target_light, 'max_color_temp_kelvin') }}"
+      hs: "{{ state_attr(target_light, 'hs_color') }}"
+      held_hue: >-
+        {{ hs[0] if hs is sequence and hs is not string and hs is not mapping and hs | count > 0 else none }}
+      held_saturation: >-
+        {{ hs[1] if hs is sequence and hs is not string and hs is not mapping and hs | count > 1 else none }}
+      valid_value: >-
+        {% if rotation_mode == 'brightness' %}
+          {{ brightness is number and brightness is not boolean and is_number(brightness)
+             and 0 <= brightness <= 255 }}
+        {% elif rotation_mode == 'color_temperature' %}
+          {{ kelvin is number and kelvin is not boolean and is_number(kelvin) and kelvin > 0
+             and min_kelvin is number and min_kelvin is not boolean and is_number(min_kelvin)
+             and max_kelvin is number and max_kelvin is not boolean and is_number(max_kelvin)
+             and 0 < min_kelvin <= max_kelvin }}
+        {% else %}
+          {{ held_hue is number and held_hue is not boolean and is_number(held_hue) and 0 <= held_hue <= 360
+             and held_saturation is not boolean
+             and (held_saturation is not number or (is_number(held_saturation) and 0 <= held_saturation <= 100)) }}
+        {% endif %}
+  - if: "{{ not valid_value }}"
+    then:
+      - stop: 조절에 필요한 조명 속성이 유효하지 않음
+  - variables:
+      held_hue: "{{ (held_hue % 360) | round(3) if held_hue is number else 0 }}"
+      held_saturation: "{{ held_saturation | round(3) if held_saturation is number else 50 }}"
+      target_value: >-
+        {% if rotation_mode == 'brightness' %}{{ (brightness / 255 * 100) | round(3) }}
+        {% elif rotation_mode == 'color_temperature' %}{{ kelvin }}
+        {% elif rotation_mode == 'light_hue' %}{{ held_hue }}
+        {% else %}{{ held_saturation }}{% endif %}
+  - repeat:
+      while: "{{ is_state(target_light, 'on') and as_timestamp(now()) < deadline }}"
+      sequence:
+        - variables:
+            previous_value: "{{ target_value }}"
+            target_value: >-
+              {% if rotation_mode == 'brightness' %}
+                {{ [[target_value + direction * brightness_step_pct, 1] | max, 100] | min | round(3) }}
+              {% elif rotation_mode == 'color_temperature' %}
+                {{ [[target_value + direction * color_temp_step_kelvin, min_kelvin] | max, max_kelvin] | min | round(0) }}
+              {% elif rotation_mode == 'light_hue' %}
+                {{ ((target_value + direction * hue_step_percent * 3.6) % 360) | round(3) }}
+              {% else %}
+                {{ [[target_value + direction * saturation_step_pct, 0] | max, 100] | min | round(3) }}
+              {% endif %}
+        - if: "{{ target_value != previous_value }}"
+          then:
+            - choose:
+                - conditions: "{{ rotation_mode == 'brightness' }}"
+                  sequence:
+                    - action: light.turn_on
+                      target:
+                        entity_id: "{{ target_light }}"
+                      data:
+                        brightness_pct: "{{ target_value }}"
+                - conditions: "{{ rotation_mode == 'color_temperature' }}"
+                  sequence:
+                    - action: light.turn_on
+                      target:
+                        entity_id: "{{ target_light }}"
+                      data:
+                        color_temp_kelvin: "{{ target_value }}"
+              default:
+                - action: light.turn_on
+                  target:
+                    entity_id: "{{ target_light }}"
+                  data:
+                    hs_color: >-
+                      {{ [target_value, held_saturation] if rotation_mode == 'light_hue'
+                         else [held_hue, target_value] }}
+        - if: "{{ as_timestamp(now()) >= deadline }}"
+          then:
+            - stop: 최대 반복 시간 도달
+        - delay:
+            seconds: "{{ [repeat_interval_ms / 1000, [deadline - as_timestamp(now()), 0] | max] | min }}"

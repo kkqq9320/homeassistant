@@ -59,6 +59,16 @@ IKEA 시험 50개와 기존 Aqara 회귀 시험 33개를 실행했다.
 `automation_reloaded` 이벤트가 명시적으로 중단하도록 구성했다.
 `test_reload_cancels_rotation`에서 수정 전 추가 조명 호출을 재현하고 수정 후 중단을 확인했다.
 
+## 독립 검토
+
+`3fea9b3c91523fd1304c7f3bbcdc5417fcf6bd91`부터
+`8303db18f7a78296aeb65631658a1dfbef369c09`까지의 변경을 별도 검토자가 읽기 전용으로
+검토했다. Critical·Important·Minor 발견 사항은 없었고 병합 가능으로 판정했다.
+서비스 처리 중 정지·반대 회전, 자동화 다시 불러오기, 잘못된 MQTT 보고,
+시작 대기 시간 초과 시험 5개를 두 HA 버전에서 새로 실행해 모두 통과했다.
+
+## 설치 단계의 확인
+
 MQTT 입력은 E1744의 공개 동작 계약에 따른 합성 메시지다. 실제 노브의 무선 통신,
 MQTT 패킷, 물리 조명 반응은 이 시험에 포함하지 않았다. 설치와 클릭 지정은
 [사용 가이드](../../blueprints/automation/z2m_ikea_e1744_light_control/README.md)를 따른다.
